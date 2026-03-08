@@ -1,7 +1,7 @@
 task:
   task_name: "open_microwave"
   policy: "adaptive"
-  num_episode: 25
+  num_episode: 1
   grasp: False
 
 env:
@@ -25,9 +25,17 @@ env:
   start_index: 80
   collectDataPath: "microwave/0" # ../logs/_seed{}/***
   collectPC: False
+  collectRGBVideo: True
   collectForce: True
   visualizePointcloud: False
   PointDownSampleNum: 2048
+  rgbVideo:
+    cameraType: fixed
+    cameraIds: []
+    fps: 10
+    codec: libx264
+    crf: 18
+    preset: fast
 
   reset:
     bottle:

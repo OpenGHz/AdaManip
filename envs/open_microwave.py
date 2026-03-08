@@ -797,6 +797,44 @@ class OpenMicroWave(BaseEnv):
 
         obs = {"pc": pc, "proprioception": proprioception_info, "dof_state": dof_state, "prev_action": prev_actions}
         return obs
+
+    def collect_rgb_frames(self, camera_type="fixed", camera_ids=None):
+        if not self.cfg["env"]["enableCameraSensors"]:
+            raise RuntimeError("RGB capture requires enableCameraSensors=True")
+
+        if camera_type == "fixed":
+            selected_camera_ids = list(range(self.num_cam)) if camera_ids is None else list(camera_ids)
+        elif camera_type == "hand":
+            selected_camera_ids = [0]
+        else:
+            raise ValueError(f"Unsupported camera_type: {camera_type}")
+
+        frames = [[] for _ in range(self.num_envs)]
+        self.gym.start_access_image_tensors(self.sim)
+        try:
+            if camera_type == "fixed":
+                for env_id in range(self.num_envs):
+                    env_ptr = self.env_ptr_list[env_id]
+                    for cam_id in selected_camera_ids:
+                        camera_handle = self.fixed_camera_handle_list[env_id][cam_id]
+                        color_image = self.gym.get_camera_image(self.sim, env_ptr, camera_handle, gymapi.IMAGE_COLOR)
+                        frames[env_id].append(self._reshape_rgb_image(color_image))
+            else:
+                for env_id in range(self.num_envs):
+                    env_ptr = self.env_ptr_list[env_id]
+                    camera_handle = self.hand_camera_handle_list[env_id]
+                    color_image = self.gym.get_camera_image(self.sim, env_ptr, camera_handle, gymapi.IMAGE_COLOR)
+                    frames[env_id].append(self._reshape_rgb_image(color_image))
+        finally:
+            self.gym.end_access_image_tensors(self.sim)
+
+        return frames
+
+    def _reshape_rgb_image(self, color_image):
+        width = self.cfg["env"]["cam"]["width"]
+        height = self.cfg["env"]["cam"]["height"]
+        frame = np.asarray(color_image, dtype=np.uint8).reshape(height, width, 4)[:, :, :3]
+        return np.ascontiguousarray(frame)
     
     def compute_point_cloud_state(self, depth_bar, type="fixed"):
         camera_props = gymapi.CameraProperties()
