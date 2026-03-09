@@ -47,6 +47,7 @@ def get_args():
 
     # control
     parser.add_argument('--resume', action='store_true', default=False)
+    parser.add_argument('--ckpt_path', type=str, default='checkpoints/ema_nets.pth')
     
 
     args = parser.parse_args()

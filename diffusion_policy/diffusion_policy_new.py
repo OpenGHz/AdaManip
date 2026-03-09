@@ -106,6 +106,9 @@ class DiffusionPolicy:
         self.nets = self.nets.to(self.device)
 
     def train(self):
+        if self.args.resume:
+            self.load_checkpoint(self.args.ckpt_path)
+
         # create dataloader
         dataset = ManipDataset(
             dataset_path=self.args.dataset_path,
