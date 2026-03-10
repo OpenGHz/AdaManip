@@ -17,11 +17,13 @@ class ModelController(BaseController) :
         self.cfg_model = cfg["model"]
         self.args = argument()
         self.args.dof_dim = self.cfg_model["dof_dim"]
-        self.args.ckpt_path = self.cfg_model["diffusion_model_path"]
+        self.args.ckpt_path = self.cfg_model.get("model_path", self.cfg_model["diffusion_model_path"])
         self.args.obs_horizon = self.cfg_model["obs_horizon"]
         self.args.pred_horizon = self.cfg_model["pred_horizon"]
         self.args.action_horizon = self.cfg_model["action_horizon"]
         self.args.num_diffusion_iters = self.cfg_model["num_diffusion_iters"]
+        self.args.policy_mode = self.cfg_model.get("policy_mode", self.args.policy_mode)
+        self.args.flow_sampling_steps = self.cfg_model.get("flow_sampling_steps", self.args.flow_sampling_steps)
         self.args.discrete = self.cfg_model["discrete"]
         self.args.input_feat = self.cfg_model["input_feat"]
         self.args.feat_dim = self.cfg_model["feat_dim"]

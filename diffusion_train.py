@@ -23,6 +23,8 @@ def get_args():
     parser.add_argument('--lr', type=float, default=1e-4)
     parser.add_argument('--weight_decay', type=float, default=1e-6)
     parser.add_argument('--logdir', type=str, default='logs')
+    parser.add_argument('--policy_mode', type=str, default='diffusion', choices=['diffusion', 'flow_matching'])
+    parser.add_argument('--flow_sampling_steps', type=int, default=100)
     # seg pointnet para
     parser.add_argument('--input_feat', type=int, default=3)
     parser.add_argument('--feat_dim', type=int, default='128')
