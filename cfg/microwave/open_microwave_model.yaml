@@ -6,11 +6,12 @@ task:
 
 model:
   policy_mode: diffusion
+  # policy_mode: flow_matching
   obs_horizon: 2
   action_horizon: 1
   pred_horizon: 4
   num_diffusion_iters: 100
-  flow_sampling_steps: 10
+  flow_sampling_steps: 100
   flow_beta_alpha: 1.5
   flow_beta_beta: 1.0
   flow_tau_cutoff: 0.999
@@ -23,9 +24,9 @@ model:
   grasp: False 
   grasp_model_path: None
   # model_path: './ckpt/microwave/microwave_manip.pth'
-  model_path: logs/Mar09/19-17-36/ema_nets.pth
+  # model_path: logs/Mar09/19-17-36/ema_nets.pth
+  # diffusion_model_path: logs/Mar10/10-53-38/ema_nets.pth
   diffusion_model_path: logs/Mar09/19-17-36/ema_nets.pth
-
 
 env:
   env_name: "open microwave"
@@ -48,9 +49,17 @@ env:
   start_index: 80
   collectDataPath: "microwave/0" # ../logs/_seed{}/***
   collectPC: False
+  collectRGBVideo: True
   collectForce: True
   visualizePointcloud: False
   PointDownSampleNum: 2048
+  rgbVideo:
+    cameraType: fixed
+    cameraIds: []
+    fps: 10
+    codec: libx264
+    crf: 18
+    preset: fast
 
   reset:
     bottle:

@@ -15,6 +15,7 @@ from dataset.dataset import Experience, Episode_Buffer, obs_wrapper
 import ipdb,time,os
 import collections
 import av
+import shutil
 
 
 class Mp4VideoWriter:
@@ -64,14 +65,20 @@ class EpisodeVideoRecorder:
         self.width = width
         self.height = height
         self.writers = {}
+        self.current_episode_dir = None
+        self.current_episode_idx = None
+        self.temp_dir = os.path.join(self.save_dir, "_tmp")
 
     def start_episode(self, episode_idx):
         self.close_episode()
+        self.current_episode_idx = episode_idx
+        self.current_episode_dir = os.path.join(self.temp_dir, f"episode_{episode_idx:04d}")
+        if os.path.isdir(self.current_episode_dir):
+            shutil.rmtree(self.current_episode_dir)
         for env_id in range(self.num_envs):
             for camera_id in self.camera_ids:
                 output_path = os.path.join(
-                    self.save_dir,
-                    f"episode_{episode_idx:04d}",
+                    self.current_episode_dir,
                     f"env_{env_id:02d}_cam_{camera_id:02d}.mp4",
                 )
                 self.writers[(env_id, camera_id)] = Mp4VideoWriter(
@@ -96,12 +103,79 @@ class EpisodeVideoRecorder:
             writer.close()
         self.writers = {}
 
+    def finish_episode(self, env_results=None):
+        episode_dir = self.current_episode_dir
+        episode_idx = self.current_episode_idx
+        self.close_episode()
+
+        if episode_dir is None or episode_idx is None:
+            return
+
+        if env_results is None:
+            final_episode_dir = os.path.join(self.save_dir, f"episode_{episode_idx:04d}")
+            if os.path.isdir(final_episode_dir):
+                shutil.rmtree(final_episode_dir)
+            os.makedirs(os.path.dirname(final_episode_dir), exist_ok=True)
+            if os.path.isdir(episode_dir):
+                shutil.move(episode_dir, final_episode_dir)
+        else:
+            for env_id, result in enumerate(env_results):
+                result_dir = os.path.join(self.save_dir, result, f"episode_{episode_idx:04d}")
+                os.makedirs(result_dir, exist_ok=True)
+                for camera_id in self.camera_ids:
+                    src_path = os.path.join(episode_dir, f"env_{env_id:02d}_cam_{camera_id:02d}.mp4")
+                    if os.path.exists(src_path):
+                        shutil.move(src_path, os.path.join(result_dir, os.path.basename(src_path)))
+            if os.path.isdir(episode_dir):
+                shutil.rmtree(episode_dir)
+
+        self.current_episode_dir = None
+        self.current_episode_idx = None
+
+    def discard_episode(self):
+        episode_dir = self.current_episode_dir
+        self.close_episode()
+        if episode_dir is not None and os.path.isdir(episode_dir):
+            shutil.rmtree(episode_dir)
+        self.current_episode_dir = None
+        self.current_episode_idx = None
+
 class OpenMicroWaveManipulation(BaseManipulation) :
 
     def __init__(self, env : BaseEnv, cfg : dict, logger : Logger) :
 
         super().__init__(env, cfg, logger)
         self.video_recorder = None
+
+    def _build_collect_save_dir(self):
+        dataset_path = "open_microwave" + "_" + self.cfg["task"]["policy"] + "_" + str(self.cfg["env"]["asset"]["AssetNum"])+"_eps"+str(self.cfg["task"]["num_episode"])+"_clock"+str(self.cfg["env"]["clockwise"])
+        return './demo_data/'+ dataset_path
+
+    def _build_eval_save_dir(self):
+        dataset_path = "eval_open_microwave" + "_" + self.cfg["task"]["policy"] + "_" + str(self.cfg["env"]["asset"]["AssetNum"])+"_eps"+str(self.cfg["task"]["num_episode"])+"_clock"+str(self.cfg["env"]["clockwise"])
+        return './demo_data/'+ dataset_path
+
+    def _init_video_recorder(self, save_dir):
+        if not self.cfg['env'].get('collectRGBVideo', False):
+            self.video_recorder = None
+            return
+        self.video_recorder = EpisodeVideoRecorder(
+            save_dir=save_dir,
+            cfg=self.cfg,
+            num_envs=self.env.num_envs,
+            width=self.cfg["env"]["cam"]["width"],
+            height=self.cfg["env"]["cam"]["height"],
+            num_fixed_cameras=getattr(self.env, "num_cam", 1),
+        )
+
+    def _record_video_frame(self):
+        if self.video_recorder is None:
+            return
+        rgb_frames = self.env.collect_rgb_frames(
+            camera_type=self.video_recorder.camera_type,
+            camera_ids=self.video_recorder.camera_ids,
+        )
+        self.video_recorder.write_frames(rgb_frames)
 
     '''
     test env
@@ -201,46 +275,62 @@ class OpenMicroWaveManipulation(BaseManipulation) :
         eps_num = self.cfg["task"]["num_episode"]
         succ_cnt = 0
         succ_rate = []
+        self._init_video_recorder(self._build_eval_save_dir())
         for eps in range(eps_num):
             print("eps_{}".format(eps+1))
             done_flag = [False] * self.env.num_envs
+            episode_results = None
             self.env.reset(clock_same=False)
             self.env.gripper = torch.zeros((self.env.num_envs,1),device=self.env.device)
+            if self.video_recorder is not None:
+                self.video_recorder.start_episode(eps)
+                self._record_video_frame()
             
             obs = self.env.collect_diff_data()
             pcs, env_state = obs_wrapper(obs)
             pcs_deque = collections.deque([pcs] * diffusion.args.obs_horizon, maxlen=diffusion.args.obs_horizon)
             env_state_deque = collections.deque([env_state] * diffusion.args.obs_horizon, maxlen=diffusion.args.obs_horizon)
 
-            step = 0
-            while step <= 32:
-                action = diffusion.infer_action_with_seg(pcs_deque, env_state_deque).detach()
-                action = action[:, :diffusion.args.action_horizon, :]
-                step += diffusion.args.action_horizon
-                for act in range(action.shape[1]):
-                    quat = self.rotate_6d_to_quat(action[:, act, 3:9])
-                    pre_action = torch.cat([action[:, act, :3], quat], dim=-1)
-                    self.env.gripper = (action[:, act, -1] > 0.5).unsqueeze(-1).int()
-                    for j in range(15):
-                        self.env.step(pre_action)
+            try:
+                step = 0
+                while step <= 32:
+                    action = diffusion.infer_action_with_seg(pcs_deque, env_state_deque).detach()
+                    action = action[:, :diffusion.args.action_horizon, :]
+                    step += diffusion.args.action_horizon
+                    for act in range(action.shape[1]):
+                        quat = self.rotate_6d_to_quat(action[:, act, 3:9])
+                        pre_action = torch.cat([action[:, act, :3], quat], dim=-1)
+                        self.env.gripper = (action[:, act, -1] > 0.5).unsqueeze(-1).int()
+                        for j in range(15):
+                            self.env.step(pre_action)
+
+                        self._record_video_frame()
+                        self.env.actions = action[:, act, :]
+                        obs = self.env.collect_diff_data()
+                        pcs, env_state = obs_wrapper(obs)
+                        pcs_deque.append(pcs)
+                        env_state_deque.append(env_state)
                     
-                    self.env.actions = action[:, act, :]
-                    obs = self.env.collect_diff_data()
-                    pcs, env_state = obs_wrapper(obs)
-                    pcs_deque.append(pcs)
-                    env_state_deque.append(env_state)
-                
-                for env_id in range(self.env.num_envs):
-                    if (torch.abs(self.env.one_dof_tensor[env_id, 0]) > np.pi/7).cpu().item() and not done_flag[env_id]:
-                        done_flag[env_id] = True
-                        succ_cnt += 1
-                        print(f"Env {env_id} Succeeded")
+                    for env_id in range(self.env.num_envs):
+                        if (torch.abs(self.env.one_dof_tensor[env_id, 0]) > np.pi/7).cpu().item() and not done_flag[env_id]:
+                            done_flag[env_id] = True
+                            succ_cnt += 1
+                            print(f"Env {env_id} Succeeded")
+
+                episode_results = ["success" if success else "failure" for success in done_flag]
+            finally:
+                if self.video_recorder is not None:
+                    if episode_results is None:
+                        self.video_recorder.discard_episode()
+                    else:
+                        self.video_recorder.finish_episode(episode_results)
             cur_rate = succ_cnt/(self.env.num_envs)
             print(f"Eps {eps+1}, current succ rate {cur_rate}")
             succ_rate.append(cur_rate)
             succ_cnt = 0
         print(f"Average Success rate: {np.mean(succ_rate)}")
         print(f"Success rate std: {np.std(succ_rate)}")
+        self.video_recorder = None
         return                
     
     def process_data(self, goal_pos):
@@ -256,12 +346,7 @@ class OpenMicroWaveManipulation(BaseManipulation) :
         self.env.actions = action_with_gripper
         for env_id in range(self.env.num_envs):
             self.eps_buffer[env_id].add(pc[env_id], env_state[env_id],action_with_gripper[env_id])
-        if self.video_recorder is not None:
-            rgb_frames = self.env.collect_rgb_frames(
-                camera_type=self.video_recorder.camera_type,
-                camera_ids=self.video_recorder.camera_ids,
-            )
-            self.video_recorder.write_frames(rgb_frames)
+        self._record_video_frame()
 
     def collect_manip_data(self):
         # move to the handle
@@ -269,17 +354,8 @@ class OpenMicroWaveManipulation(BaseManipulation) :
         policy = self.cfg["task"]["policy"]
         rot_quat = torch.tensor([ 0, 0, -0.1305262, 0.9914449], device=self.env.device)
         demo_buffer = Experience()
-        dataset_path = "open_microwave" + "_" + self.cfg["task"]["policy"] + "_" + str(self.cfg["env"]["asset"]["AssetNum"])+"_eps"+str(self.cfg["task"]["num_episode"])+"_clock"+str(self.cfg["env"]["clockwise"])
-        save_dir = './demo_data/'+ dataset_path
-        if self.cfg['env']['collectData'] and self.cfg['env'].get('collectRGBVideo', False):
-            self.video_recorder = EpisodeVideoRecorder(
-                save_dir=save_dir,
-                cfg=self.cfg,
-                num_envs=self.env.num_envs,
-                width=self.cfg["env"]["cam"]["width"],
-                height=self.cfg["env"]["cam"]["height"],
-                num_fixed_cameras=getattr(self.env, "num_cam", 1),
-            )
+        save_dir = self._build_collect_save_dir()
+        self._init_video_recorder(save_dir)
         for eps in range(eps_num):
             self.eps_buffer = [Episode_Buffer() for _ in range(self.env.num_envs)]
             print("eps_{}".format(eps+1))
@@ -490,7 +566,7 @@ class OpenMicroWaveManipulation(BaseManipulation) :
                         print(f"Env {env_id} Succeeded")
             finally:
                 if self.video_recorder is not None:
-                    self.video_recorder.close_episode()
+                    self.video_recorder.finish_episode()
 
         if self.cfg['env']['collectData']:
             save_path = save_dir + '/demo_data.zip'
