@@ -23,7 +23,10 @@ class argument:
         self.obs_horizon = 2
         self.action_horizon = 1
         self.num_diffusion_iters = 100
-        self.flow_sampling_steps = 100
+        self.flow_sampling_steps = 10
+        self.flow_beta_alpha = 1.5
+        self.flow_beta_beta = 1.0
+        self.flow_tau_cutoff = 0.999
         self.DDIM = False
         self.discrete = False
         self.dof_dim = 0
@@ -42,7 +45,14 @@ class DiffusionPolicy:
         if self.policy_mode not in ['diffusion', 'flow_matching']:
             raise ValueError(f"Unsupported policy mode: {self.policy_mode}")
         if not hasattr(self.args, 'flow_sampling_steps') or self.args.flow_sampling_steps <= 0:
-            self.args.flow_sampling_steps = max(1, getattr(self.args, 'num_diffusion_iters', 100))
+            self.args.flow_sampling_steps = 10
+        if not hasattr(self.args, 'flow_beta_alpha'):
+            self.args.flow_beta_alpha = 1.5
+        if not hasattr(self.args, 'flow_beta_beta'):
+            self.args.flow_beta_beta = 1.0
+        if not hasattr(self.args, 'flow_tau_cutoff'):
+            self.args.flow_tau_cutoff = 0.999
+        self.args.flow_tau_cutoff = float(min(max(self.args.flow_tau_cutoff, 0.0), 0.999999))
         self.nets = self.build_net(args)
         self.noise_scheduler = self.get_noise_scheduler(args) if self.policy_mode == 'diffusion' else None
         if torch.cuda.is_available():
@@ -110,6 +120,9 @@ class DiffusionPolicy:
             'obs_horizon': self.args.obs_horizon,
             'action_dim': self.action_dim,
             'flow_sampling_steps': self.args.flow_sampling_steps,
+            'flow_beta_alpha': self.args.flow_beta_alpha,
+            'flow_beta_beta': self.args.flow_beta_beta,
+            'flow_tau_cutoff': self.args.flow_tau_cutoff,
             'num_diffusion_iters': self.args.num_diffusion_iters,
         }
 
@@ -169,11 +182,21 @@ class DiffusionPolicy:
         noise_pred = self.nets['noise_pred_net'](noisy_actions, timesteps, global_cond=obs_cond)
         return nn.functional.mse_loss(noise_pred, noise)
 
+    def _sample_flow_timesteps(self, batch_size, dtype):
+        # Sample low-noise cutoff shifted Beta timesteps as described by pi0.
+        beta_dist = torch.distributions.Beta(self.args.flow_beta_alpha, self.args.flow_beta_beta)
+        shifted_beta = beta_dist.sample((batch_size,)).to(device=self.device, dtype=dtype)
+        return self.args.flow_tau_cutoff * (1.0 - shifted_beta)
+
     def _compute_flow_matching_loss(self, naction, obs_cond):
         source_actions = torch.randn_like(naction)
-        timesteps = torch.rand((naction.shape[0],), device=self.device, dtype=naction.dtype)
+        # uniform distribution sampling
+        # timesteps = torch.rand((naction.shape[0],), device=self.device, dtype=naction.dtype)
+        # beta distribution sampling
+        timesteps = self._sample_flow_timesteps(naction.shape[0], naction.dtype)
         time_view = timesteps.view(-1, 1, 1)
         interpolated_actions = (1.0 - time_view) * source_actions + time_view * naction
+        # Keep the target aligned with forward Euler rollout from noise to data.
         target_flow = naction - source_actions
         flow_pred = self.nets['noise_pred_net'](interpolated_actions, timesteps, global_cond=obs_cond)
         return nn.functional.mse_loss(flow_pred, target_flow)
@@ -201,7 +224,7 @@ class DiffusionPolicy:
         step_count = max(1, self.args.flow_sampling_steps)
         dt = 1.0 / step_count
         for step_idx in range(step_count):
-            normalized_time = (step_idx + 0.5) / step_count
+            normalized_time = min((step_idx + 0.5) / step_count, self.args.flow_tau_cutoff)
             timesteps = torch.full(
                 (batch_size,), normalized_time, device=self.device, dtype=sampled_actions.dtype)
             flow_pred = self.nets['noise_pred_net'](

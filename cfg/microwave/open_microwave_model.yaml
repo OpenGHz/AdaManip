@@ -11,6 +11,9 @@ model:
   pred_horizon: 4
   num_diffusion_iters: 100
   flow_sampling_steps: 10
+  flow_beta_alpha: 1.5
+  flow_beta_beta: 1.0
+  flow_tau_cutoff: 0.999
   discrete: False
   input_feat: 3
   feat_dim: 128

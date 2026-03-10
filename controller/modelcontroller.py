@@ -24,6 +24,9 @@ class ModelController(BaseController) :
         self.args.num_diffusion_iters = self.cfg_model["num_diffusion_iters"]
         self.args.policy_mode = self.cfg_model.get("policy_mode", self.args.policy_mode)
         self.args.flow_sampling_steps = self.cfg_model.get("flow_sampling_steps", self.args.flow_sampling_steps)
+        self.args.flow_beta_alpha = self.cfg_model.get("flow_beta_alpha", self.args.flow_beta_alpha)
+        self.args.flow_beta_beta = self.cfg_model.get("flow_beta_beta", self.args.flow_beta_beta)
+        self.args.flow_tau_cutoff = self.cfg_model.get("flow_tau_cutoff", self.args.flow_tau_cutoff)
         self.args.discrete = self.cfg_model["discrete"]
         self.args.input_feat = self.cfg_model["input_feat"]
         self.args.feat_dim = self.cfg_model["feat_dim"]

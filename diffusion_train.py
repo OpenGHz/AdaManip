@@ -24,7 +24,10 @@ def get_args():
     parser.add_argument('--weight_decay', type=float, default=1e-6)
     parser.add_argument('--logdir', type=str, default='logs')
     parser.add_argument('--policy_mode', type=str, default='diffusion', choices=['diffusion', 'flow_matching'])
-    parser.add_argument('--flow_sampling_steps', type=int, default=100)
+    parser.add_argument('--flow_sampling_steps', type=int, default=10)
+    parser.add_argument('--flow_beta_alpha', type=float, default=1.5)
+    parser.add_argument('--flow_beta_beta', type=float, default=1.0)
+    parser.add_argument('--flow_tau_cutoff', type=float, default=0.999)
     # seg pointnet para
     parser.add_argument('--input_feat', type=int, default=3)
     parser.add_argument('--feat_dim', type=int, default='128')
