@@ -1,124 +1,176 @@
 import argparse
 import os
-from typing import Dict, Iterable, List, Tuple
+import re
+from collections import defaultdict
 
 import numpy as np
+import yaml
 import zarr
 
 
-def resolve_dataset_path(path: str) -> str:
-    if os.path.isdir(path):
-        candidate = os.path.join(path, "demo_data.zip")
-        if os.path.exists(candidate):
-            return candidate
-        raise FileNotFoundError(f"No demo_data.zip found under directory: {path}")
+def resolve_paths(input_path):
+    normalized_path = os.path.abspath(input_path)
+    if os.path.isdir(normalized_path):
+        dataset_path = os.path.join(normalized_path, "demo_data.zip")
+        save_dir = normalized_path
+    else:
+        dataset_path = normalized_path
+        save_dir = os.path.dirname(normalized_path)
 
-    if os.path.isfile(path):
-        return path
+    if not os.path.exists(dataset_path):
+        raise FileNotFoundError(f"Dataset not found: {dataset_path}")
 
-    raise FileNotFoundError(f"Dataset path does not exist: {path}")
-
-
-def flatten_arrays(group: zarr.hierarchy.Group, prefix: str = "") -> List[Tuple[str, zarr.Array]]:
-    arrays: List[Tuple[str, zarr.Array]] = []
-    for key, value in group.items():
-        full_key = f"{prefix}/{key}" if prefix else key
-        if isinstance(value, zarr.Array):
-            arrays.append((full_key, value))
-        else:
-            arrays.extend(flatten_arrays(value, full_key))
-    return arrays
+    return dataset_path, save_dir
 
 
-def format_shape(shape: Iterable[int]) -> str:
-    return "x".join(str(dim) for dim in shape)
+def load_cfg_num_envs(cfg_path):
+    if not cfg_path:
+        return None
+    with open(cfg_path, "r", encoding="utf-8") as handle:
+        cfg = yaml.safe_load(handle)
+    return cfg.get("env", {}).get("numEnvs")
 
 
-def summarize_episode_lengths(episode_ends: np.ndarray) -> Dict[str, object]:
-    if episode_ends.size == 0:
-        return {
-            "episode_count": 0,
-            "total_steps": 0,
-            "min_length": 0,
-            "max_length": 0,
-            "mean_length": 0.0,
-            "first_lengths": [],
-        }
+def summarize_dataset(dataset_path):
+    dataset_root = zarr.open(dataset_path, mode="r")
+    pcs = dataset_root["data"]["pcs"]
+    env_state = dataset_root["data"]["env_state"]
+    action = dataset_root["data"]["action"]
+    episode_ends = np.asarray(dataset_root["meta"]["episode_ends"])
 
-    starts = np.concatenate(([0], episode_ends[:-1]))
-    lengths = episode_ends - starts
+    episode_starts = np.concatenate(([0], episode_ends[:-1]))
+    frames_per_episode = episode_ends - episode_starts
+
     return {
-        "episode_count": int(len(lengths)),
-        "total_steps": int(episode_ends[-1]),
-        "min_length": int(lengths.min()),
-        "max_length": int(lengths.max()),
-        "mean_length": float(lengths.mean()),
-        "first_lengths": lengths[: min(10, len(lengths))].tolist(),
+        "pcs_shape": tuple(pcs.shape),
+        "env_state_shape": tuple(env_state.shape),
+        "action_shape": tuple(action.shape),
+        "total_frames": int(pcs.shape[0]),
+        "points_per_frame": int(pcs.shape[1]) if len(pcs.shape) > 1 else None,
+        "point_dim": int(pcs.shape[2]) if len(pcs.shape) > 2 else None,
+        "total_saved_episodes": int(len(episode_ends)),
+        "frames_per_episode": frames_per_episode.astype(int).tolist(),
     }
 
 
-def print_dataset_summary(dataset_path: str, verbose: bool) -> None:
-    dataset_root = zarr.open(dataset_path, mode="r")
-    arrays = flatten_arrays(dataset_root)
+def summarize_videos(save_dir):
+    rgb_root = os.path.join(save_dir, "rgb_videos")
+    if not os.path.isdir(rgb_root):
+        return None
 
-    print(f"dataset: {dataset_path}")
-    print(f"zarr format: {getattr(dataset_root, 'zarr_format', 'unknown')}")
-    print(f"array count: {len(arrays)}")
+    env_pattern = re.compile(r"env_(\d+)_cam_(\d+)\.mp4$")
+    collect_episode_dirs = []
+    categorized_dirs = {}
 
-    print("\narrays:")
-    for array_path, array in arrays:
-        chunk_desc = format_shape(array.chunks) if array.chunks is not None else "-"
+    for entry in sorted(os.listdir(rgb_root)):
+        entry_path = os.path.join(rgb_root, entry)
+        if entry.startswith("episode_") and os.path.isdir(entry_path):
+            collect_episode_dirs.append(entry_path)
+        elif entry in {"success", "failure"} and os.path.isdir(entry_path):
+            categorized_dirs[entry] = entry_path
+
+    summary = {
+        "collect_episode_count": len(collect_episode_dirs),
+        "collect_env_counts": {},
+        "success_env_counts": {},
+        "failure_env_counts": {},
+        "inferred_num_envs": None,
+    }
+
+    if collect_episode_dirs:
+        collect_env_counts = defaultdict(int)
+        env_ids = set()
+        for episode_dir in collect_episode_dirs:
+            env_ids_in_episode = set()
+            for filename in os.listdir(episode_dir):
+                match = env_pattern.match(filename)
+                if match:
+                    env_id = int(match.group(1))
+                    env_ids_in_episode.add(env_id)
+            for env_id in env_ids_in_episode:
+                collect_env_counts[env_id] += 1
+            env_ids.update(env_ids_in_episode)
+        summary["collect_env_counts"] = dict(sorted(collect_env_counts.items()))
+        summary["inferred_num_envs"] = len(env_ids)
+
+    for result_name, result_root in categorized_dirs.items():
+        result_counts = defaultdict(int)
+        env_ids = set()
+        for episode_name in sorted(os.listdir(result_root)):
+            episode_dir = os.path.join(result_root, episode_name)
+            if not os.path.isdir(episode_dir):
+                continue
+            env_ids_in_episode = set()
+            for filename in os.listdir(episode_dir):
+                match = env_pattern.match(filename)
+                if match:
+                    env_id = int(match.group(1))
+                    env_ids_in_episode.add(env_id)
+            for env_id in env_ids_in_episode:
+                result_counts[env_id] += 1
+            env_ids.update(env_ids_in_episode)
+        summary[f"{result_name}_env_counts"] = dict(sorted(result_counts.items()))
+        if summary["inferred_num_envs"] is None and env_ids:
+            summary["inferred_num_envs"] = len(env_ids)
+
+    return summary
+
+
+def print_summary(input_path, cfg_path=None):
+    dataset_path, save_dir = resolve_paths(input_path)
+    dataset_summary = summarize_dataset(dataset_path)
+    video_summary = summarize_videos(save_dir)
+    cfg_num_envs = load_cfg_num_envs(cfg_path)
+
+    print(f"Dataset path: {dataset_path}")
+    print(f"Save dir: {save_dir}")
+    print(f"pcs shape: {dataset_summary['pcs_shape']}")
+    print(f"env_state shape: {dataset_summary['env_state_shape']}")
+    print(f"action shape: {dataset_summary['action_shape']}")
+    print(f"Total saved episodes: {dataset_summary['total_saved_episodes']}")
+    print(f"Total frames: {dataset_summary['total_frames']}")
+    print(f"Points per frame: {dataset_summary['points_per_frame']}")
+    print(f"Point dimension: {dataset_summary['point_dim']}")
+
+    if cfg_num_envs is not None:
+        print(f"Configured num envs: {cfg_num_envs}")
+
+    if video_summary is not None:
+        if video_summary["inferred_num_envs"] is not None:
+            print(f"Video-inferred num envs: {video_summary['inferred_num_envs']}")
+        if video_summary["collect_episode_count"]:
+            print(f"Collected rollout episodes from rgb_videos: {video_summary['collect_episode_count']}")
+            print("Per-env rollout episode counts:")
+            for env_id, count in video_summary["collect_env_counts"].items():
+                print(f"  env_{env_id:02d}: {count}")
+        if video_summary["success_env_counts"]:
+            print("Per-env success episode counts:")
+            for env_id, count in video_summary["success_env_counts"].items():
+                print(f"  env_{env_id:02d}: {count}")
+        if video_summary["failure_env_counts"]:
+            print("Per-env failure episode counts:")
+            for env_id, count in video_summary["failure_env_counts"].items():
+                print(f"  env_{env_id:02d}: {count}")
+
+    print("Frames and points per saved episode:")
+    for episode_idx, frame_count in enumerate(dataset_summary["frames_per_episode"]):
         print(
-            f"  - {array_path}: shape={tuple(array.shape)}, dtype={array.dtype}, chunks={chunk_desc}"
+            f"  episode_{episode_idx:04d}: frames={frame_count}, "
+            f"points_per_frame={dataset_summary['points_per_frame']}"
         )
 
-    episode_ends = None
-    if "meta" in dataset_root and "episode_ends" in dataset_root["meta"]:
-        episode_ends = np.asarray(dataset_root["meta"]["episode_ends"][:])
-
-    if episode_ends is not None:
-        episode_stats = summarize_episode_lengths(episode_ends)
-        print("\nepisodes:")
-        print(f"  - count: {episode_stats['episode_count']}")
-        print(f"  - total_steps: {episode_stats['total_steps']}")
-        print(f"  - min_length: {episode_stats['min_length']}")
-        print(f"  - max_length: {episode_stats['max_length']}")
-        print(f"  - mean_length: {episode_stats['mean_length']:.2f}")
-        print(f"  - first_lengths: {episode_stats['first_lengths']}")
-
-    if "data" in dataset_root:
-        print("\npreview:")
-        for key in ("pcs", "env_state", "action"):
-            if key not in dataset_root["data"]:
-                continue
-            array = dataset_root["data"][key]
-            print(f"  - data/{key}: shape={tuple(array.shape)}, dtype={array.dtype}")
-            if verbose and array.shape[0] > 0:
-                sample = np.asarray(array[0])
-                print(f"    first_sample_min={sample.min():.6f}")
-                print(f"    first_sample_max={sample.max():.6f}")
-                print(f"    first_sample_mean={sample.mean():.6f}")
-
-
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Inspect an ada_manip demo_data zarr dataset.")
-    parser.add_argument(
-        "dataset_path",
-        help="Path to demo_data.zip or a directory containing demo_data.zip.",
+    print(
+        "Note: demo_data.zip does not store env_id for each saved episode, "
+        "so exact per-env saved-episode counts cannot be recovered from the zarr file alone."
     )
-    parser.add_argument(
-        "--verbose",
-        action="store_true",
-        help="Print simple statistics for the first sample of each main array.",
-    )
-    return parser
 
 
-def main() -> None:
-    parser = build_parser()
+def main():
+    parser = argparse.ArgumentParser(description="Inspect ada_manip demo dataset statistics")
+    parser.add_argument("input_path", help="Path to a demo_data directory or demo_data.zip file")
+    parser.add_argument("--cfg", dest="cfg_path", help="Optional YAML config path to print configured numEnvs")
     args = parser.parse_args()
-    dataset_path = resolve_dataset_path(args.dataset_path)
-    print_dataset_summary(dataset_path, verbose=args.verbose)
+    print_summary(args.input_path, cfg_path=args.cfg_path)
 
 
 if __name__ == "__main__":
