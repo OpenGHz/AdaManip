@@ -33,7 +33,7 @@ trap cleanup EXIT INT TERM
 		--runtime_mode=rpyc-server \
 		--rpyc_host="$RPYC_HOST" \
 		--rpyc_port="$RPYC_PORT" \
-		--headless
+		# --headless
 ) &
 SERVER_PID=$!
 
