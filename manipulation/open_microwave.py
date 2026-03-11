@@ -156,6 +156,23 @@ class OpenMicroWaveManipulation(BaseManipulation) :
         dataset_path = "eval_open_microwave" + "_" + self.cfg["task"]["policy"] + "_" + str(self.cfg["env"]["asset"]["AssetNum"])+"_eps"+str(self.cfg["task"]["num_episode"])+"_clock"+str(self.cfg["env"]["clockwise"])
         return './demo_data/'+ dataset_path
 
+    def _prepare_save_dir(self, save_dir, purpose):
+        if not os.path.exists(save_dir):
+            return
+
+        prompt = f"{purpose} output directory '{save_dir}' already exists. Overwrite it? [y/N]: "
+        try:
+            answer = input(prompt).strip().lower()
+        except EOFError as exc:
+            raise RuntimeError(
+                f"{purpose} output directory '{save_dir}' already exists and overwrite confirmation could not be read."
+            ) from exc
+
+        if answer not in {"y", "yes"}:
+            raise RuntimeError(f"Aborted to avoid overwriting existing data at '{save_dir}'.")
+
+        shutil.rmtree(save_dir)
+
     def _init_video_recorder(self, save_dir):
         if not self.cfg['env'].get('collectRGBVideo', False):
             self.video_recorder = None
@@ -276,7 +293,9 @@ class OpenMicroWaveManipulation(BaseManipulation) :
         eps_num = self.cfg["task"]["num_episode"]
         succ_cnt = 0
         succ_rate = []
-        self._init_video_recorder(self._build_eval_save_dir())
+        eval_save_dir = self._build_eval_save_dir()
+        self._prepare_save_dir(eval_save_dir, "Evaluation")
+        self._init_video_recorder(eval_save_dir)
         for eps in range(eps_num):
             print("eps_{}".format(eps+1))
             done_flag = [False] * self.env.num_envs
@@ -356,6 +375,7 @@ class OpenMicroWaveManipulation(BaseManipulation) :
         rot_quat = torch.tensor([ 0, 0, -0.1305262, 0.9914449], device=self.env.device)
         demo_buffer = Experience()
         save_dir = self._build_collect_save_dir()
+        self._prepare_save_dir(save_dir, "Collection")
         self._init_video_recorder(save_dir)
         for eps in range(eps_num):
             self.eps_buffer = [Episode_Buffer() for _ in range(self.env.num_envs)]
