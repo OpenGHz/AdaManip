@@ -13,7 +13,6 @@ from utils.config import set_np_formatting, set_seed, get_args, parse_sim_params
 from utils.parse_task import parse_env
 
 from utils.parse import *
-from ipc.service import serve_env
 
 def run():
     
@@ -22,6 +21,8 @@ def run():
     env = parse_env(args, cfg, sim_params, logdir)
 
     if args.runtime_mode == "rpyc-server":
+        from ipc.service import serve_env
+
         serve_env(
             env,
             host=args.rpyc_host,

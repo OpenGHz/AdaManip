@@ -161,7 +161,7 @@ class RemoteEnv:
         raise AttributeError(f"RemoteEnv has no attribute '{name}'")
 
     def __del__(self) -> None:
-        conn = getattr(self, "_conn", None)
+        conn = self.__dict__.get("_conn")
         if conn is not None:
             try:
                 conn.close()

@@ -1,29 +1,35 @@
-from controller.gtcontroller import GtController
-from controller.base_controller import BaseController
-from controller.modelcontroller import ModelController
+import importlib
 
-from manipulation.base_manipulation import BaseManipulation
-from manipulation.open_bottle import OpenBottleManipulation
-from manipulation.open_microwave import OpenMicroWaveManipulation
-from manipulation.open_pen import OpenPenManipulation
-from manipulation.open_door import OpenDoorManipulation
-from manipulation.open_window import OpenWindowManipulation
-from manipulation.open_pc import OpenPressureCookerManipulation
-from manipulation.open_cm import OpenCoffeeMachineManipulation
-from manipulation.open_lamp import OpenLampManipulation
-from manipulation.open_safe import OpenSafeManipulation
+
+CONTROLLER_REGISTRY = {
+    "GtController": ("controller.gtcontroller", "GtController"),
+    "ModelController": ("controller.modelcontroller", "ModelController"),
+}
+
+
+MANIPULATION_REGISTRY = {
+    "OpenBottleManipulation": ("manipulation.open_bottle", "OpenBottleManipulation"),
+    "OpenMicroWaveManipulation": ("manipulation.open_microwave", "OpenMicroWaveManipulation"),
+    "OpenPenManipulation": ("manipulation.open_pen", "OpenPenManipulation"),
+    "OpenDoorManipulation": ("manipulation.open_door", "OpenDoorManipulation"),
+    "OpenWindowManipulation": ("manipulation.open_window", "OpenWindowManipulation"),
+    "OpenPressureCookerManipulation": ("manipulation.open_pc", "OpenPressureCookerManipulation"),
+    "OpenCoffeeMachineManipulation": ("manipulation.open_cm", "OpenCoffeeMachineManipulation"),
+    "OpenLampManipulation": ("manipulation.open_lamp", "OpenLampManipulation"),
+    "OpenSafeManipulation": ("manipulation.open_safe", "OpenSafeManipulation"),
+}
+
+
+def _load_symbol(registry, name):
+    module_name, class_name = registry[name]
+    module = importlib.import_module(module_name)
+    return getattr(module, class_name)
 
 def parse_controller(args, env, manipulation, cfg, logger):
-    try:
-        print(args.controller)
-        controller = eval(args.controller)(env, manipulation, cfg, logger)
-    except NameError as e:
-        print(e)
-    return controller
+    print(args.controller)
+    controller_class = _load_symbol(CONTROLLER_REGISTRY, args.controller)
+    return controller_class(env, manipulation, cfg, logger)
 
 def parse_manipulation(args, env, cfg, logger):
-    try:
-        manipulation = eval(args.manipulation)(env, cfg, logger)
-    except NameError as e:
-        print(e)
-    return manipulation
+    manipulation_class = _load_symbol(MANIPULATION_REGISTRY, args.manipulation)
+    return manipulation_class(env, cfg, logger)

@@ -10,9 +10,13 @@ from diffusion_policy.seg_pointnet import PointNet2SemSegSSG
 from diffusion_policy.model.diffusion.conditional_unet1d import ConditionalUnet1D
 from dataset.dataset import ManipDataset   
 from datetime import datetime
-from torch.utils.tensorboard import SummaryWriter
 from tqdm.auto import tqdm
 import ipdb
+
+try:
+    from torch.utils.tensorboard import SummaryWriter
+except ImportError:
+    SummaryWriter = None
 
 class argument:
     def __init__(self):
@@ -282,6 +286,8 @@ class DiffusionPolicy:
 
         #current_time = datetime.now().strftime('%b%d_%H-%M-%S')
         log_dir = self.args.logdir + '/' + current_day + '/' + current_time
+        if SummaryWriter is None:
+            raise ImportError("tensorboard is required for training but is not installed")
         writer = SummaryWriter(log_dir=log_dir)
         pth_path = log_dir + '/ema_nets.pth'
         loss_name = 'Loss/flow_loss' if self.policy_mode == 'flow_matching' else 'Loss/score_loss'

@@ -10,8 +10,14 @@ import operator
 from copy import deepcopy
 import random
 
-from isaacgym import gymapi
-from isaacgym.gymutil import get_property_setter_map, get_property_getter_map, get_default_setter_args, apply_random_samples, check_buckets, generate_random_samples
+try:
+
+    from isaacgym import gymapi
+    from isaacgym.gymutil import get_property_setter_map, get_property_getter_map, get_default_setter_args, apply_random_samples, check_buckets, generate_random_samples
+
+except ImportError:
+    
+    print("This script requires Isaac Gym to be installed.")
 
 import numpy as np
 import torch

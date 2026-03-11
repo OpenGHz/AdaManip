@@ -5,14 +5,11 @@
 # distribution of this software and related documentation without an express
 # license agreement from NVIDIA CORPORATION is strictly prohibited.
 import os
+import argparse
 import yaml
-
-from isaacgym import gymapi
-from isaacgym import gymutil
 
 import numpy as np
 import random
-import torch
 # import ipdb
 
 
@@ -32,6 +29,7 @@ def warn_algorithm_name():
 
 
 def set_seed(seed, torch_deterministic=False):
+    import torch
     
     print("Setting seed: {}".format(seed))
 
@@ -111,6 +109,12 @@ def load_cfg(args):
 
 
 def parse_sim_params(args, cfg):
+    if args.runtime_mode == "rpyc-client":
+        return None
+
+    from isaacgym import gymapi
+    from isaacgym import gymutil
+
     # initialize sim
     sim_params = gymapi.SimParams()
     sim_params.dt = 1./60.
@@ -144,7 +148,59 @@ def parse_sim_params(args, cfg):
     return sim_params
 
 
+def _build_client_parser():
+    parser = argparse.ArgumentParser(description="AdaManip client runtime")
+    parser.add_argument("--headless", action="store_true", default=False)
+    parser.add_argument("--task", type=str, default="OpenBottle")
+    parser.add_argument("--controller", type=str, default="GTController")
+    parser.add_argument("--manipulation", type=str, default="OpenBottleManipulation")
+    parser.add_argument("--logdir", type=str, default="./logs/")
+    parser.add_argument("--cfg_env", type=str, default="Base")
+    parser.add_argument("--seed", type=int, default=-1)
+    parser.add_argument("--start_id", type=int, default=0)
+    parser.add_argument("--runtime_mode", type=str, default="rpyc-client")
+    parser.add_argument("--rpyc_host", type=str, default="localhost")
+    parser.add_argument("--rpyc_port", type=int, default=18861)
+    parser.add_argument("--sim_device", type=str, default="cuda:0")
+    parser.add_argument("--pipeline", type=str, default="gpu")
+    parser.add_argument("--physics_engine", type=str, default="physx")
+    parser.add_argument("--num_threads", type=int, default=0)
+    parser.add_argument("--subscenes", type=int, default=0)
+    parser.add_argument("--slices", type=int, default=0)
+    return parser
+
+
+def _normalize_client_args(args):
+    sim_device = args.sim_device.lower()
+    if sim_device.startswith("cuda"):
+        device_type = "cuda"
+        device_id = int(sim_device.split(":", 1)[1]) if ":" in sim_device else 0
+        args.use_gpu = True
+    else:
+        device_type = "cpu"
+        device_id = 0
+        args.use_gpu = False
+
+    args.device_id = device_id
+    args.compute_device_id = device_id
+    args.graphics_device_id = device_id
+    args.sim_device_type = device_type
+    args.use_gpu_pipeline = args.pipeline == "gpu"
+    args.device = device_type if args.use_gpu_pipeline else 'cpu'
+    args.logdir, _ = retrieve_cfg(args)
+    return args
+
+
 def get_args():
+    runtime_parser = argparse.ArgumentParser(add_help=False)
+    runtime_parser.add_argument("--runtime_mode", type=str, default="local")
+    runtime_args, _ = runtime_parser.parse_known_args()
+
+    if runtime_args.runtime_mode == "rpyc-client":
+        return _normalize_client_args(_build_client_parser().parse_args())
+
+    from isaacgym import gymutil
+
     custom_parameters = [
         {"name": "--headless", "action": "store_true", "default": False,
             "help": "Force display off at all times"},

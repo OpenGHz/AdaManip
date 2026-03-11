@@ -20,9 +20,13 @@ from diffusion_policy.model.diffusion.mask_generator import LowdimMaskGenerator
 from diffusion_policy.common.checkpoint_util import TopKCheckpointManager
 from dataset.dataset import ManipDataset   
 from datetime import datetime
-from torch.utils.tensorboard import SummaryWriter
 from tqdm.auto import tqdm
 import ipdb
+
+try:
+    from torch.utils.tensorboard import SummaryWriter
+except ImportError:
+    SummaryWriter = None
 
 class argument:
     def __init__(self):
@@ -207,6 +211,8 @@ class DiffusionPolicyTran:
 
         #current_time = datetime.now().strftime('%b%d_%H-%M-%S')
         log_dir = self.args.logdir + '/' + current_day + '/' + current_time
+        if SummaryWriter is None:
+            raise ImportError("tensorboard is required for training but is not installed")
         writer = SummaryWriter(log_dir=log_dir)
         pth_path = log_dir + '/ema_nets.pth'
         # configure checkpoint

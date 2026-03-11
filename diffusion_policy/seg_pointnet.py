@@ -3,8 +3,7 @@ import torch.nn.functional as F
 
 # https://github.com/erikwijmans/Pointnet2_PyTorch
 from pointnet2_ops.pointnet2_modules import PointnetFPModule, PointnetSAModule
-from pointnet2.models.pointnet2_ssg_cls import PointNet2ClassificationSSG
-import ipdb
+from diffusion_policy.pointnet2_backbone import PointNet2ClassificationSSG
 
 class PointNet2SemSegSSG(PointNet2ClassificationSSG):
     def _build_model(self):

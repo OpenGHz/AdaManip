@@ -2,6 +2,7 @@ from manipulation.base_manipulation import BaseManipulation
 from envs.base_env import BaseEnv
 from manipulation.utils.transform import *
 from logging import Logger
+from typing import TYPE_CHECKING, Any
 import numpy as np
 import torch.nn.functional as F
 import random
@@ -294,7 +295,7 @@ class OpenMicroWaveManipulation(BaseManipulation) :
             try:
                 step = 0
                 while step <= 32:
-                    action = diffusion.infer_action_with_seg(pcs_deque, env_state_deque).detach()
+                    action = diffusion.infer_action_with_seg(pcs_deque, env_state_deque).detach().float()
                     action = action[:, :diffusion.args.action_horizon, :]
                     step += diffusion.args.action_horizon
                     for act in range(action.shape[1]):

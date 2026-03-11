@@ -7,6 +7,9 @@ RPYC_PORT="${ADA_MANIP_RPYC_PORT:-18861}"
 CFG_ENV="${ADA_MANIP_CFG_ENV:-cfg/microwave/open_microwave_model.yaml}"
 SIM_DEVICE="${ADA_MANIP_SIM_DEVICE:-cuda:0}"
 SEED="${ADA_MANIP_SEED:-0}"
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
+ADA_MANIP_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)
+REPO_ROOT=$(CDPATH= cd -- "$ADA_MANIP_ROOT/../.." && pwd)
 
 cleanup() {
 	if [ -n "${SERVER_PID:-}" ] && kill -0 "$SERVER_PID" 2>/dev/null; then
@@ -17,21 +20,25 @@ cleanup() {
 
 trap cleanup EXIT INT TERM
 
-python run.py \
-	--task=OpenMicroWave \
-	--controller=ModelController \
-	--manipulation=OpenMicroWaveManipulation \
-	--sim_device="$SIM_DEVICE" \
-	--seed="$SEED" \
-	--pipeline=gpu \
-	--cfg_env="$CFG_ENV" \
-	--runtime_mode=rpyc-server \
-	--rpyc_host="$RPYC_HOST" \
-	--rpyc_port="$RPYC_PORT" \
-	--headless &
+(
+	cd "$ADA_MANIP_ROOT"
+	pixi run --manifest-path "$REPO_ROOT/pyproject.toml" -e ada-data python run.py \
+		--task=OpenMicroWave \
+		--controller=ModelController \
+		--manipulation=OpenMicroWaveManipulation \
+		--sim_device="$SIM_DEVICE" \
+		--seed="$SEED" \
+		--pipeline=gpu \
+		--cfg_env="$CFG_ENV" \
+		--runtime_mode=rpyc-server \
+		--rpyc_host="$RPYC_HOST" \
+		--rpyc_port="$RPYC_PORT" \
+		--headless
+) &
 SERVER_PID=$!
 
-python run.py \
+cd "$ADA_MANIP_ROOT"
+pixi run --manifest-path "$REPO_ROOT/pyproject.toml" -e ada-manip python run.py \
 	--task=OpenMicroWave \
 	--controller=ModelController \
 	--manipulation=OpenMicroWaveManipulation \
