@@ -1,7 +1,5 @@
 # Tasks
 
-## ADAPTIVE MANIPULATION SEQUENCE
-
 1. Bottle: Grasp the Cap. Rotate Cap after a failed Lift Up. Randomly sample Rotate/Lift if the previous action is Rotate.
 
 2. Pen: Same as Bottle.
@@ -20,7 +18,7 @@
 
 9. Microwave: Pull Door. If succeed, then continue opening the door. If failed, Push Button. Then Pull Door again to open it.
 
-## OPERATIONS AND PROMPTS
+## OPERATIONS AND SEMANTICS
 
 <!-- 
 上面是几个任务的操作说明，每个任务可能有多种实现路径，请为每个任务总结一个模糊命令和所有可能的操作集合（每个操作必须同时包含动作和对象，例如不能只是“向上提起”，必须是“向上提起瓶盖”），然后将该集合中的操作按不同的初始情况下存在的可能最少操作步骤形成最优具体无冗余步骤链集合。例如对于Window任务，总结如下：

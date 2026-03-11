@@ -155,7 +155,10 @@ def get_args():
         {"name": "--logdir", "type": str, "default": "./logs/"},
         {"name": "--cfg_env", "type": str, "default": "Base"},
         {"name": "--seed", "type": int, "default":-1, "help": "Random seed"},
-        {"name": "--start_id", "type": int, "default":0, "help": "Start Index of the loaded assets"}]
+        {"name": "--start_id", "type": int, "default":0, "help": "Start Index of the loaded assets"},
+        {"name": "--runtime_mode", "type": str, "default": "local", "help": "Runtime mode: local, rpyc-server, rpyc-client"},
+        {"name": "--rpyc_host", "type": str, "default": "localhost", "help": "RPyC host for server/client mode"},
+        {"name": "--rpyc_port", "type": int, "default": 18861, "help": "RPyC port for server/client mode"}]
 
     # parse arguments
     args = gymutil.parse_arguments(

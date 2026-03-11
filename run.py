@@ -13,12 +13,21 @@ from utils.config import set_np_formatting, set_seed, get_args, parse_sim_params
 from utils.parse_task import parse_env
 
 from utils.parse import *
+from ipc.service import serve_env
 
 def run():
     
     logger = Logger(name=args.task)
 
     env = parse_env(args, cfg, sim_params, logdir)
+
+    if args.runtime_mode == "rpyc-server":
+        serve_env(
+            env,
+            host=args.rpyc_host,
+            port=args.rpyc_port,
+        )
+        return
 
     manipulation = parse_manipulation(args, env, cfg, logger)
 

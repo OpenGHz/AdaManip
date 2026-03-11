@@ -14,9 +14,13 @@ from envs.open_pressurecooker import OpenPressureCooker
 from envs.open_coffeemachine import OpenCoffeeMachine
 from envs.open_lamp import OpenLamp
 from envs.open_safe import OpenSafe
+from ipc.remote_env import RemoteEnv
 from utils.config import warn_task_name
 
 def parse_env(args, cfg, sim_params, log_dir):
+
+    if args.runtime_mode == "rpyc-client":
+        return RemoteEnv(host=args.rpyc_host, port=args.rpyc_port)
 
     # create native task and pass custom config
     device_id = args.device_id
