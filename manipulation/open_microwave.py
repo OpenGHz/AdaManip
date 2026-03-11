@@ -295,7 +295,7 @@ class OpenMicroWaveManipulation(BaseManipulation) :
             try:
                 step = 0
                 while step <= 32:
-                    action = diffusion.infer_action_with_seg(pcs_deque, env_state_deque).detach().float()
+                    action = diffusion.infer_action_with_seg(pcs_deque, env_state_deque).detach()
                     action = action[:, :diffusion.args.action_horizon, :]
                     step += diffusion.args.action_horizon
                     for act in range(action.shape[1]):
