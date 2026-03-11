@@ -3,6 +3,8 @@ plotly==5.22.0
 zarr==2.16.1
 ipdb==0.13.13
 open3d==0.18.0
-diffusers==0.11.1
-huggingface-hub==0.24.0
+diffusers==0.35.1
+huggingface-hub>=0.36,<0.37
+sentence-transformers==5.2.3
+transformers>=4.41,<5
 einops==0.8.0

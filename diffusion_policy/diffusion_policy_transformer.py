@@ -8,14 +8,14 @@ from typing import Dict, Tuple
 from einops import rearrange, reduce
 from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
 from diffusers.schedulers.scheduling_ddim import DDIMScheduler
-from diffusers.training_utils import EMAModel
-from diffusers.optimization import get_scheduler
 from diffusion_policy.common.pytorch_util import dict_apply, optimizer_to
 from diffusion_policy.pointnet import PointNetEncoder
 from diffusion_policy.model.common.normalizer import LinearNormalizer
+from diffusion_policy.model.common.lr_scheduler import get_scheduler
 from diffusion_policy.seg_pointnet import PointNet2SemSegSSG
 from diffusion_policy.model.diffusion.transformer_for_diffusion import TransformerForDiffusion
 from diffusion_policy.model.diffusion.conditional_unet1d import ConditionalUnet1D
+from diffusion_policy.model.diffusion.ema_model import EMAModel
 from diffusion_policy.model.diffusion.mask_generator import LowdimMaskGenerator
 from diffusion_policy.common.checkpoint_util import TopKCheckpointManager
 from dataset.dataset import ManipDataset   
