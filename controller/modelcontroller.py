@@ -1,11 +1,7 @@
-from tkinter import NO
 from envs.base_env import BaseEnv
 from manipulation.base_manipulation import BaseManipulation
 from controller.base_controller import BaseController
 from logging import Logger
-import numpy as np
-import torch
-import ipdb
 from diffusion_policy.diffusion_policy_new import argument
 # from diffusion_policy.diffusion_policy_transformer import DiffusionPolicyTran, argument
 

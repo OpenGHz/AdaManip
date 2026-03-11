@@ -1,7 +1,6 @@
 '''
 bug 设置关节limit无效
 '''
-import random
 from base_env import BaseEnv
 import torch
 import numpy as np
@@ -10,13 +9,9 @@ import math
 import json
 from isaacgym.torch_utils import *
 from pytorch3d.ops import sample_farthest_points
-from pytorch3d.vis.plotly_vis import plot_scene
-from pytorch3d.structures import Pointclouds
 from random import shuffle
-import pytorch3d.transforms as tf
-from isaacgym import gymutil, gymtorch, gymapi
+from isaacgym import gymtorch, gymapi
 # from torch.utils.tensorboard import SummaryWriter
-import ipdb
 
 def quat_axis(q, axis=0):
     basis_vec = torch.zeros(q.shape[0], 3, device=q.device)

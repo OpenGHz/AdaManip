@@ -3,7 +3,6 @@ import logging
 import torch
 import torch.nn as nn
 import einops
-import ipdb
 from einops.layers.torch import Rearrange
 
 from diffusion_policy.model.diffusion.conv1d_components import (

@@ -2,7 +2,6 @@ from envs.base_env import BaseEnv
 from manipulation.base_manipulation import BaseManipulation
 from controller.base_controller import BaseController
 from logging import Logger
-from diffusion_policy.diffusion_policy_new import DiffusionPolicy, argument
 
 class GtController(BaseController) :
 

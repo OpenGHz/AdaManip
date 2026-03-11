@@ -1,11 +1,6 @@
 import numpy as np
 import torch
-import pickle
-from pytorch3d.ops import sample_farthest_points
-from pytorch3d.structures import Pointclouds
-from pytorch3d.vis.plotly_vis import AxisArgs, plot_batch_individually, plot_scene
 import zarr
-import ipdb
 
 def obs_wrapper(obs, dof=0):
     pcs = obs['pc']

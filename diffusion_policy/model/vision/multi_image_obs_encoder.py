@@ -5,7 +5,7 @@ import torch.nn as nn
 import torchvision
 from diffusion_policy.model.vision.crop_randomizer import CropRandomizer
 from diffusion_policy.model.common.module_attr_mixin import ModuleAttrMixin
-from diffusion_policy.pytorch_util import dict_apply, replace_submodules
+from diffusion_policy.pytorch_util import replace_submodules
 
 
 class MultiImageObsEncoder(ModuleAttrMixin):

@@ -4,7 +4,6 @@ time 2023/7/20
 '''
 import numpy as np
 import torch
-import ipdb
 
 def quat_mul(a, b):
     assert a.shape == b.shape

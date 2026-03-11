@@ -1,24 +1,12 @@
-from multiprocessing.reduction import DupFd
-from turtle import pos
 
-from matplotlib.pyplot import flag
 from manipulation.base_manipulation import BaseManipulation
 from envs.base_env import BaseEnv
 from manipulation.utils.transform import *
 from logging import Logger
 import numpy as np
-import torch.nn.functional as F
-import math
-from collections import deque
-import pytorch3d.transforms as tf
-from pytorch3d.ops import sample_farthest_points
-from pytorch3d.vis.plotly_vis import plot_scene
-from pytorch3d.structures import Pointclouds
-from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
 from dataset.dataset import Experience, Episode_Buffer, obs_wrapper
-import ipdb,time,os
+import os
 import collections
-from scipy.spatial.transform import Rotation as R
 
 class OpenBottleManipulation(BaseManipulation) :
 

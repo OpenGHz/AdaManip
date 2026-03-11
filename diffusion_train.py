@@ -1,6 +1,4 @@
 import argparse
-from socket import IP_DEFAULT_MULTICAST_LOOP
-import ipdb
 
 def get_args():
     # use parser to get args

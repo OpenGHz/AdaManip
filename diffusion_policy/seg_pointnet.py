@@ -1,5 +1,4 @@
 import torch.nn as nn
-import torch.nn.functional as F
 
 # https://github.com/erikwijmans/Pointnet2_PyTorch
 from pointnet2_ops.pointnet2_modules import PointnetFPModule, PointnetSAModule
