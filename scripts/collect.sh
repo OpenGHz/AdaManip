@@ -14,6 +14,8 @@ IFS=',' read -ra items <<< "$1"
 
 echo "开始执行任务，解析到 ${#items[@]} 个物品..."
 
+role=$2
+
 for item in "${items[@]}"; do
   # 去除可能存在的首尾空格 (可选，视具体情况而定)
   item=$(echo "$item" | xargs) 
@@ -21,7 +23,7 @@ for item in "${items[@]}"; do
   echo "--------------------------------"
   echo "正在处理: $item"
   
-  sh scripts/${item}/collect_${item}_manip.sh
+  sh scripts/${item}/collect_${item}_${role}.sh
   
   if [ $? -ne 0 ]; then
     echo "错误：命令在 '$item' 上失败。"
