@@ -3,7 +3,7 @@
 # 检查是否传入了参数
 if [ -z "$1" ]; then
   echo "用法: $0 <item1,item2,item3...>"
-  echo "示例: $0 bottle,cm,door,lamp"
+  echo "示例: $0 bottle,cm,door,lamp,microwave,pc,pen,safe,window"
   exit 1
 fi
 
