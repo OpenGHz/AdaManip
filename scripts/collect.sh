@@ -8,8 +8,6 @@ if [ -z "$1" ]; then
 fi
 
 # 将传入的第一个参数按逗号分割成数组
-# IFS=, 设置内部字段分隔符为逗号
-# read -ra 将读取的内容分割并存入数组
 IFS=',' read -ra items <<< "$1"
 
 echo "开始执行任务，解析到 ${#items[@]} 个物品..."
@@ -17,16 +15,27 @@ echo "开始执行任务，解析到 ${#items[@]} 个物品..."
 role=$2
 
 for item in "${items[@]}"; do
-  # 去除可能存在的首尾空格 (可选，视具体情况而定)
+  # 去除可能存在的首尾空格
   item=$(echo "$item" | xargs) 
   
   echo "--------------------------------"
   echo "正在处理: $item"
   
-  sh scripts/${item}/collect_${item}_${role}.sh
+  # 构造脚本路径
+  script_path="scripts/${item}/collect_${item}_${role}.sh"
   
+  # 【修改点】检查文件是否存在，如果不存在则跳过
+  if [ ! -f "$script_path" ]; then
+    echo "警告：脚本 '$script_path' 不存在，已跳过。"
+    continue
+  fi
+  
+  # 执行脚本
+  sh "$script_path"
+  
+  # 检查执行结果（只有当脚本存在并执行后才检查错误）
   if [ $? -ne 0 ]; then
-    echo "错误：命令在 '$item' 上失败。"
+    echo "错误：命令在 '$item' 上执行失败。"
     exit 1
   fi
 done
