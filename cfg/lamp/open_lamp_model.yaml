@@ -6,6 +6,8 @@ task:
   max_step: 10
 
 model:
+  policy_mode: diffusion
+  # policy_mode: flow_matching
   obs_horizon: 2
   action_horizon: 1
   pred_horizon: 4
@@ -18,8 +20,10 @@ model:
   Transformer: False
 
   grasp: True 
-  grasp_model_path: './ckpt/lamp/lamp_grasp.pth'
-  diffusion_model_path:  './ckpt/lamp/lamp_manip.pth'
+  # grasp_model_path: './ckpt/lamp/lamp_grasp.pth'
+  # diffusion_model_path:  './ckpt/lamp/lamp_manip.pth'
+  grasp_model_path: logs/Mar12/02-01-30/ema_nets.pth
+  diffusion_model_path: logs/Mar12/02-01-30/ema_nets.pth
 
 
 env:

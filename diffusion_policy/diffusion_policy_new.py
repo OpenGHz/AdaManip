@@ -25,7 +25,7 @@ class argument:
         self.obs_horizon = 2
         self.action_horizon = 1
         self.num_diffusion_iters = 100
-        self.flow_sampling_steps = 10
+        self.flow_sampling_steps = 100
         self.flow_beta_alpha = 1.5
         self.flow_beta_beta = 1.0
         self.flow_tau_cutoff = 0.999
@@ -41,13 +41,13 @@ class argument:
         self.action_dim = 9
 
 class DiffusionPolicy:
-    def __init__(self, args):
+    def __init__(self, args: argument):
         self.args = args
         self.policy_mode = getattr(args, 'policy_mode', 'diffusion')
         if self.policy_mode not in ['diffusion', 'flow_matching']:
             raise ValueError(f"Unsupported policy mode: {self.policy_mode}")
         if not hasattr(self.args, 'flow_sampling_steps') or self.args.flow_sampling_steps <= 0:
-            self.args.flow_sampling_steps = 10
+            self.args.flow_sampling_steps = 100
         if not hasattr(self.args, 'flow_beta_alpha'):
             self.args.flow_beta_alpha = 1.5
         if not hasattr(self.args, 'flow_beta_beta'):
