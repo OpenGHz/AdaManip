@@ -132,11 +132,8 @@ class DiffusionPolicy:
         }
 
     def _load_checkpoint_payload(self, ckpt_path):
-        if torch.cuda.is_available():
-            payload = torch.load(ckpt_path, map_location='cuda')
-        else:
-            payload = torch.load(ckpt_path, map_location='cpu')
-
+        map_location = 'cuda' if torch.cuda.is_available() else 'cpu'
+        payload = torch.load(ckpt_path, map_location=map_location, weights_only=False)
         if isinstance(payload, dict) and 'state_dict' in payload:
             checkpoint_mode = payload.get('policy_mode')
             state_dict = payload['state_dict']
