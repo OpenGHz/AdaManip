@@ -21,6 +21,7 @@ DEFAULT_SNAPSHOT_FIELDS = (
     "rigid_body_tensor",
     "one_dof_tensor",
     "two_dof_tensor",
+    "two_flag",
     "open_bottle_stage",
     "open_door_stage",
     "clock_wise",
