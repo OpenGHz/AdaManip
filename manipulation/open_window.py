@@ -92,13 +92,14 @@ class OpenWindowManipulation(BaseManipulation) :
         max_step = self.cfg["task"]["max_step"]
         succ_cnt = 0
         succ_rate = []
-        hand_pose = self.env.hand_rigid_body_tensor[:,:7]
         print("eval_eps_{},max_step_{},policy_{}".format(eps_num, max_step, policy))
         for eps in range(eps_num):
             self.env.reset()
             done_flag = [False] * self.env.num_envs
             self.diffusion_eval_grasp(grasp_net)
 
+            # Use the latest hand pose after grasp approach as the hold target during gripper settling.
+            hand_pose = self.env.hand_rigid_body_tensor[:, :7]
             self.env.gripper = True
             for i in range(10):
                 self.env.step(hand_pose)

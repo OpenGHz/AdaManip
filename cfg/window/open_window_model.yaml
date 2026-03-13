@@ -18,8 +18,8 @@ model:
   Transformer: False
 
   grasp: True 
-  grasp_model_path: './ckpt/window/window_grasp.pth'
-  diffusion_model_path:  './ckpt/window/window_manip.pth'
+  grasp_model_path: logs/Mar13/05-59-11/ema_nets.pth
+  diffusion_model_path: logs/Mar13/05-59-50/ema_nets.pth
 
   collectData: False
 

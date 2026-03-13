@@ -58,13 +58,13 @@ class OpenPressureCookerManipulation(BaseManipulation) :
         succ_rate = []
         max_step = self.cfg["task"]["max_step"]
         print("eval_eps_{},max_step_{},policy_{}".format(eps_num, max_step,policy))
-        hand_pose = self.env.hand_rigid_body_tensor[:,:7]
         for eps in range(eps_num):
             self.env.reset()
             done_flag = [False] * self.env.num_envs
 
             self.diffusion_eval_grasp(grasp_net)
 
+            hand_pose = self.env.hand_rigid_body_tensor[:, :7]
             self.env.gripper = True
             for i in range(10):
                 self.env.step(hand_pose)

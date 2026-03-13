@@ -7,8 +7,8 @@ task:
   max_step: 25
 
 model:
-  policy_mode: diffusion
-  # policy_mode: flow_matching
+  # policy_mode: diffusion
+  policy_mode: flow_matching
   obs_horizon: 2
   action_horizon: 1
   pred_horizon: 4
@@ -27,8 +27,10 @@ model:
   grasp: True 
   # grasp_model_path: './ckpt/pc/pc_grasp.pth'
   # diffusion_model_path:  './ckpt/pc/pc_manip.pth'
-  grasp_model_path: logs/grasp_pc_6_eps20_clock0/Mar13/04-05-37/ema_nets.pth
-  diffusion_model_path: logs/manip_pc/Mar13/04-06-04/ema_nets.pth
+  # grasp_model_path: logs/grasp_pc_6_eps20_clock0/Mar13/04-05-37/ema_nets.pth
+  # diffusion_model_path: logs/manip_pc/Mar13/04-06-04/ema_nets.pth
+  grasp_model_path: logs/grasp_pc_6_eps20_clock0/Mar13/07-27-18/ema_nets.pth
+  diffusion_model_path: logs/manip_pc/Mar13/07-27-24/ema_nets.pth
   collectData: False
 
 env:

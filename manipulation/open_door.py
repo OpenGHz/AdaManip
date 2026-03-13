@@ -51,7 +51,6 @@ class OpenDoorManipulation(BaseManipulation) :
         max_step = self.cfg["task"]["max_step"]
         succ_cnt = 0
         succ_rate = []
-        hand_pose = self.env.hand_rigid_body_tensor[:,:7]
         print("eval_eps_{},max_step_{}".format(eps_num, max_step))
         for eps in range(eps_num):
             self.env.reset()
@@ -59,6 +58,7 @@ class OpenDoorManipulation(BaseManipulation) :
 
             self.diffusion_eval_grasp(grasp_net)
 
+            hand_pose = self.env.hand_rigid_body_tensor[:, :7]
             self.env.gripper = True
             for i in range(10):
                 self.env.step(hand_pose)
