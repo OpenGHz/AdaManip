@@ -1,4 +1,23 @@
 import argparse
+import os
+
+
+def infer_task_name(dataset_path_list):
+    if not dataset_path_list:
+        return None
+
+    first_path = os.path.normpath(dataset_path_list[0])
+    base_name = os.path.basename(first_path)
+    if base_name in {'demo_data.zip', 'demo_buffer.zip'}:
+        base_name = os.path.basename(os.path.dirname(first_path))
+
+    if not base_name:
+        return None
+
+    for suffix in ('_adaptive', '_succ', '_gt', '_demo'):
+        if suffix in base_name:
+            return base_name.split(suffix, 1)[0]
+    return os.path.splitext(base_name)[0]
 
 def get_args():
     # use parser to get args
@@ -21,6 +40,7 @@ def get_args():
     parser.add_argument('--lr', type=float, default=1e-4)
     parser.add_argument('--weight_decay', type=float, default=1e-6)
     parser.add_argument('--logdir', type=str, default='logs')
+    parser.add_argument('--task_name', type=str, default=None)
     parser.add_argument('--policy_mode', type=str, default='diffusion', choices=['diffusion', 'flow_matching'])
     parser.add_argument('--flow_sampling_steps', type=int, default=10)
     parser.add_argument('--flow_beta_alpha', type=float, default=1.5)
@@ -58,6 +78,8 @@ def get_args():
 
 if __name__ == '__main__':
     args = get_args()
+    if args.task_name is None:
+        args.task_name = infer_task_name(args.dataset_path)
     from diffusion_policy.diffusion_policy_new import DiffusionPolicy
     policy = DiffusionPolicy(args)
     # from diffusion_policy.diffusion_policy_transformer import DiffusionPolicyTran

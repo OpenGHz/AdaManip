@@ -146,7 +146,7 @@ class OpenMicroWaveManipulation(BaseManipulation) :
 
     def _build_eval_save_dir(self):
         dataset_path = "eval_open_microwave" + "_" + self.cfg["task"]["policy"] + "_" + str(self.cfg["env"]["asset"]["AssetNum"])+"_eps"+str(self.cfg["task"]["num_episode"])+"_clock"+str(self.cfg["env"]["clockwise"])
-        return './demo_data/'+ dataset_path
+        return './eval_data/'+ dataset_path
 
     def _prepare_save_dir(self, save_dir, purpose):
         if not os.path.exists(save_dir):

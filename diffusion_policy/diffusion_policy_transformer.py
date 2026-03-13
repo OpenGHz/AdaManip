@@ -26,6 +26,7 @@ class argument:
     def __init__(self):
         self.ckpt_path = 'checkpoints/ema_nets.pth'
         self.dataset_path = 'demo_data/open_bottle/demo_buffer.zip'
+        self.task_name = None
         self.pred_horizon = 4
         self.obs_horizon = 2
         self.action_horizon = 1
@@ -44,6 +45,7 @@ class argument:
 class DiffusionPolicyTran:
     def __init__(self, args):
         self.args = args
+        self.task_name = getattr(args, 'task_name', None)
         self.nets = self.build_net(args)
         self.noise_scheduler = self.get_noise_scheduler(args)
         self.normalizer = LinearNormalizer()

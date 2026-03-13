@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import numpy as np
+import os
 from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
 from diffusers.schedulers.scheduling_ddim import DDIMScheduler
 from diffusion_policy.seg_pointnet import PointNet2SemSegSSG
@@ -20,6 +21,7 @@ class argument:
     def __init__(self):
         self.ckpt_path = 'checkpoints/ema_nets.pth'
         self.dataset_path = 'demo_data/open_bottle/demo_buffer.zip'
+        self.task_name = None
         self.policy_mode = 'diffusion'
         self.pred_horizon = 4
         self.obs_horizon = 2
@@ -43,6 +45,7 @@ class argument:
 class DiffusionPolicy:
     def __init__(self, args: argument):
         self.args = args
+        self.task_name = getattr(args, 'task_name', None)
         self.policy_mode = getattr(args, 'policy_mode', 'diffusion')
         if self.policy_mode not in ['diffusion', 'flow_matching']:
             raise ValueError(f"Unsupported policy mode: {self.policy_mode}")
@@ -157,6 +160,15 @@ class DiffusionPolicy:
 
     def _save_checkpoint(self, ckpt_path, state_dict):
         torch.save(self._checkpoint_payload(state_dict), ckpt_path)
+
+    def _get_run_log_dir(self):
+        current_day = datetime.now().strftime('%b%d')
+        current_time = datetime.now().strftime('%H-%M-%S')
+        path_parts = [self.args.logdir]
+        if self.task_name:
+            path_parts.append(self.task_name)
+        path_parts.extend([current_day, current_time])
+        return os.path.join(*path_parts)
 
     def _encode_obs_condition(self, npcs, npose):
         pcs_features = self.nets['vision_encoder'](npcs)
@@ -278,16 +290,11 @@ class DiffusionPolicy:
             num_warmup_steps=500,
             num_training_steps=len(dataloader) * self.args.num_epochs
         )
-        # get current day
-        current_day = datetime.now().strftime('%b%d')
-        current_time = datetime.now().strftime('%H-%M-%S')
-
-        #current_time = datetime.now().strftime('%b%d_%H-%M-%S')
-        log_dir = self.args.logdir + '/' + current_day + '/' + current_time
+        log_dir = self._get_run_log_dir()
         if SummaryWriter is None:
             raise ImportError("tensorboard is required for training but is not installed")
         writer = SummaryWriter(log_dir=log_dir)
-        pth_path = log_dir + '/ema_nets.pth'
+        pth_path = os.path.join(log_dir, 'ema_nets.pth')
         loss_name = 'Loss/flow_loss' if self.policy_mode == 'flow_matching' else 'Loss/score_loss'
 
         # start training
