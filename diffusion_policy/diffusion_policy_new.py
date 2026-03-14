@@ -2,12 +2,13 @@ import torch
 import torch.nn as nn
 import numpy as np
 import os
+import copy
 from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
 from diffusers.schedulers.scheduling_ddim import DDIMScheduler
+from diffusers.optimization import get_scheduler
+from diffusers.training_utils import EMAModel
 from diffusion_policy.seg_pointnet import PointNet2SemSegSSG
-from diffusion_policy.model.common.lr_scheduler import get_scheduler
 from diffusion_policy.model.diffusion.conditional_unet1d import ConditionalUnet1D
-from diffusion_policy.model.diffusion.ema_model import EMAModel
 from dataset.dataset import ManipDataset   
 from datetime import datetime
 from tqdm.auto import tqdm
@@ -67,6 +68,28 @@ class DiffusionPolicy:
         print("training device:",self.device)
         self.nets.to(self.device)
         print(f"using policy mode: {self.policy_mode}")
+
+    def _build_ema_model(self):
+        # diffusers API changed from model-based to parameters-based; support both.
+        try:
+            ema = EMAModel(model=self.nets, power=0.75)
+            uses_parameters_api = False
+        except TypeError:
+            ema = EMAModel(parameters=self.nets.parameters(), power=0.75)
+            uses_parameters_api = True
+        return ema, uses_parameters_api
+
+    def _step_ema_model(self, ema, uses_parameters_api):
+        if uses_parameters_api:
+            ema.step(self.nets.parameters())
+        else:
+            ema.step(self.nets)
+
+    def _get_ema_state_dict(self, ema, uses_parameters_api, ema_save_model):
+        if not uses_parameters_api and hasattr(ema, "averaged_model"):
+            return ema.averaged_model.state_dict()
+        ema.copy_to(ema_save_model.parameters())
+        return ema_save_model.state_dict()
 
     def build_net(self, args):
         # Initialize Networks
@@ -279,7 +302,9 @@ class DiffusionPolicy:
             # don't kill worker process afte each epoch
             persistent_workers=True
         )
-        ema = EMAModel(model=self.nets,power=0.75)
+        ema, ema_uses_parameters_api = self._build_ema_model()
+        ema_save_model = copy.deepcopy(self.nets).eval().to(self.device)
+        ema_save_model.requires_grad_(False)
         optimizer = torch.optim.AdamW(params=self.nets.parameters(),lr=self.args.lr, weight_decay=self.args.weight_decay)
         lr_scheduler = get_scheduler(
             name='cosine',
@@ -334,7 +359,7 @@ class DiffusionPolicy:
                         writer.add_scalar('Optimizer/lr', cur_lr, tglobal.n*tepoch.total+tepoch.n)
 
                         # update Exponential Moving Average of the model weights
-                        ema.step(self.nets)
+                        self._step_ema_model(ema, ema_uses_parameters_api)
 
                         # logging
                         loss_cpu = loss.item()
@@ -346,13 +371,13 @@ class DiffusionPolicy:
                 writer.add_scalar('Loss/train_loss', np.mean(epoch_loss), epoch_idx)
                 #writer.add_scalar('Loss/action_loss', np.mean(epoch_action_loss), epoch_idx)
                 if epoch_idx % self.args.save_rate == 0:
-                    ema_nets = ema.averaged_model
-                    self._save_checkpoint(pth_path, ema_nets.state_dict())
+                    ema_nets = self._get_ema_state_dict(ema, ema_uses_parameters_api, ema_save_model)
+                    self._save_checkpoint(pth_path, ema_nets)
                     print(f"save checkpoint in {epoch_idx} epoch")
         # Weights of the EMA model
         # is used for inference
-        ema_nets = ema.averaged_model
-        self._save_checkpoint(pth_path, ema_nets.state_dict())
+        ema_nets = self._get_ema_state_dict(ema, ema_uses_parameters_api, ema_save_model)
+        self._save_checkpoint(pth_path, ema_nets)
         
     def infer_action_with_seg(self, pcs, env_state):
         npcs, nstate = self._prepare_policy_inputs(pcs, env_state)
