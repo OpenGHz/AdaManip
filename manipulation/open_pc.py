@@ -289,7 +289,11 @@ class OpenPressureCookerManipulation(BaseManipulation) :
 
     def ada_policy(self, env_id, t, dof):
         open_flag = self.env.open_bottle_stage[env_id]
-        if t == 0 or dof < self.env.try_range:
+        if t == 0:
+            action = 'z' if np.random.rand() < 0.5 else 'r'
+            self.env.action_chosen[env_id, t] = action
+            return action
+        elif dof < self.env.try_range:
             action = 'r'
             self.env.action_chosen[env_id, t] = action
             return action

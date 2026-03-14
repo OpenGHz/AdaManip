@@ -465,35 +465,38 @@ class OpenMicroWaveManipulation(BaseManipulation) :
                                 self.env.step(pred_pose)
                 else:
                     # ada demo
-                    handle_pos[:, 0] += self.env.gripper_length*2
-                    for i in range(2):
-                        self.process_data(handle_pos)
-                        for j in range(15):
-                            self.env.step(handle_pos)
-                    handle_pos[:, 0] -= self.env.gripper_length + 0.014
-                    for i in range(2):
-                        self.process_data(handle_pos)
-                        for j in range(15):
-                            self.env.step(handle_pos)
-                    self.env.gripper = torch.ones((self.env.num_envs,1), device=self.env.device)
-                    self.process_data(handle_pos)
-                    for i in range(15):
-                        self.env.step(handle_pos)
-                    
                     down_q = torch.stack(self.env.num_envs * [torch.tensor([0.7071068, 0.7071068, 0, 0])]).to(self.env.device).view((self.env.num_envs, 4))
                     step_size = 0.045
-                    for i in range(2):
-                        handle_q = self.env.rigid_body_tensor[:, 3:7]
-                        open_dir = quat_axis(handle_q, axis=2)
-                        cur_p = self.env.hand_rigid_body_tensor[:, :3]
-                        pred_p = cur_p + open_dir * step_size
-                        pred_q = quat_mul(handle_q, down_q)
-                        pred_pose = torch.cat([pred_p, pred_q], dim=-1).float()
-                        self.process_data(pred_pose)
-                        for j in range(15):
-                            self.env.step(pred_pose)
+                    start_with_pull = np.random.rand() < 0.5
+
+                    if start_with_pull:
+                        handle_pos[:, 0] += self.env.gripper_length*2
+                        for i in range(2):
+                            self.process_data(handle_pos)
+                            for j in range(15):
+                                self.env.step(handle_pos)
+                        handle_pos[:, 0] -= self.env.gripper_length + 0.014
+                        for i in range(2):
+                            self.process_data(handle_pos)
+                            for j in range(15):
+                                self.env.step(handle_pos)
+                        self.env.gripper = torch.ones((self.env.num_envs,1), device=self.env.device)
+                        self.process_data(handle_pos)
+                        for i in range(15):
+                            self.env.step(handle_pos)
+
+                        for i in range(2):
+                            handle_q = self.env.rigid_body_tensor[:, 3:7]
+                            open_dir = quat_axis(handle_q, axis=2)
+                            cur_p = self.env.hand_rigid_body_tensor[:, :3]
+                            pred_p = cur_p + open_dir * step_size
+                            pred_q = quat_mul(handle_q, down_q)
+                            pred_pose = torch.cat([pred_p, pred_q], dim=-1).float()
+                            self.process_data(pred_pose)
+                            for j in range(15):
+                                self.env.step(pred_pose)
                     
-                    if self.env.clock_wise[0] == 0:
+                    if start_with_pull and self.env.clock_wise[0] == 0:
                         # continue open door
                         for i in range(6):
                             handle_q = self.env.rigid_body_tensor[:, 3:7]

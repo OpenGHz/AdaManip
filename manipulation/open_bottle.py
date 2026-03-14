@@ -320,9 +320,13 @@ class OpenBottleManipulation(BaseManipulation) :
         open_flag = self.env.open_bottle_stage[env_id]
         # print(abs(dof))
         if t == 0:
-            action = "o" if np.random.rand() > 10/20 else "r"
+            # First step is sampled from {lift, rotate}; rotate direction follows task orientation.
+            if np.random.rand() < 0.5:
+                action = 'z'
+            else:
+                action = 'r' if clock_wise else 'o'
             self.env.action_chosen[env_id,t] = action
-            return action, False
+            return action, action == 'z'
         
         elif abs(dof) < self.env.try_range and not open_flag:
             if clock_wise:

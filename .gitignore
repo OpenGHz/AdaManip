@@ -2,7 +2,7 @@
 .vscode
 assets/*
 logs/*
-demo_data/*
+*demo_data/*
 results/*
 pcd/*
 ckpt/*

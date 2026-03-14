@@ -1,24 +1,28 @@
 # Tasks
 
-1. Bottle: Grasp the Cap. Rotate Cap after a failed Lift Up. Randomly sample Rotate/Lift if the previous action is Rotate.
+数据采集脚本位于third_party/ada_manip/script中各个任务文件夹中的collect_*.sh。
 
-2. Pen: Same as Bottle.
+## ADAPTIVE MANIPULATION SEQUENCE
 
-3. Pressure Cooker: Grasp the Handle. Rotate Handle after a failed Lift Up. Randomly sample Rotate/Lift if the previous action is Rotate.
+1. Bottle: Grasp the Cap. Randomly choose the initial action from {Lift Up Cap, Rotate Cap}. If Lift Up fails, do Rotate Cap. If the previous action is Rotate Cap, randomly sample Rotate/Lift.
 
-4. Coffee Maker: Grasp Portafilter. Rotate Portafilter after a failed Pull Down. Randomly sample Rotate/Pull if the previous action is Rotate.
+2. Pen: Grasp the Cap. Randomly choose the initial action from {Lift Up Cap, Rotate Cap}. If Lift Up fails, do Rotate Cap. If the previous action is Rotate Cap, randomly sample Rotate/Lift.
 
-5. Window: Grasp the Handle. Randomly choose a direction to Rotate Handle. If failed, choose the other direction. Rotate Handle after a failed open trial. Randomly sample Rotate/Open if the previous action is Rotate.
+3. Pressure Cooker: Grasp the Handle. Randomly choose the initial action from {Lift Up Handle, Rotate Handle}. If Lift Up fails, do Rotate Handle. If the previous action is Rotate Handle, randomly sample Rotate/Lift.
 
-6. Door: Same as Window.
+4. Coffee Maker: Grasp Portafilter. Randomly choose the initial action from {Pull Portafilter, Rotate Portafilter}. If Pull fails, do Rotate Portafilter. If the previous action is Rotate Portafilter, randomly sample Rotate/Pull.
 
-7. Lamp: Randomly choose to Push/Clockwise Rotate/Counter Clockwise Rotate. Never choose a failed action.
+5. Window: Grasp the Handle. Randomly choose the initial action from {Clockwise Rotate Handle, Counterclockwise Rotate Handle}. After a failed open trial, do Rotate Handle (if one direction fails, switch to the other direction). If the previous action is Rotate Handle, randomly sample Rotate/Open.
 
-8. Safe: Pull Door. If succeed, then continue opening the door. If failed, Rotate Knob. Randomly choose a direction to Rotate and choose the other one if failed. Then Pull Door again to open it.
+6. Door: Grasp the Handle. Randomly choose the initial action from {Clockwise Rotate Handle, Counterclockwise Rotate Handle}. After a failed open trial, do Rotate Handle (if one direction fails, switch to the other direction). If the previous action is Rotate Handle, randomly sample Rotate/Open.
 
-9. Microwave: Pull Door. If succeed, then continue opening the door. If failed, Push Button. Then Pull Door again to open it.
+7. Lamp: Randomly choose the initial action from {Push Switch, Clockwise Rotate Switch, Counterclockwise Rotate Switch}. Never choose a failed action.
 
-## OPERATIONS AND SEMANTICS
+8. Safe: Randomly choose the initial action from {Pull Door, Clockwise Rotate Knob, Counterclockwise Rotate Knob}. If Pull succeeds, continue opening the door. If Pull fails, Rotate Knob (switch direction if the chosen one fails), then Pull Door again.
+
+9. Microwave: Randomly choose the initial action from {Pull Door, Push Button}. If Pull succeeds, continue opening the door. If Pull fails, Push Button, then Pull Door again.
+
+## OPERATIONS AND PROCEDURES
 
 <!-- 
 上面是几个任务的操作说明，每个任务可能有多种实现路径，请为每个任务总结一个模糊命令和所有可能的操作集合（每个操作必须同时包含动作和对象，例如不能只是“向上提起”，必须是“向上提起瓶盖”），然后将该集合中的操作按不同的初始情况下存在的可能最少操作步骤形成最优具体无冗余步骤链集合。例如对于Window任务，总结如下：
@@ -72,7 +76,6 @@
 - **模糊命令**：打开窗户
 - **操作集合**：顺时针旋转把手、逆时针旋转把手、拉开窗户
 - **无冗余步骤链**：
-  - 拉开窗户
   - 顺时针旋转把手 -> 拉开窗户
   - 逆时针旋转把手 -> 拉开窗户
 
@@ -80,7 +83,6 @@
 - **模糊命令**：打开门
 - **操作集合**：顺时针旋转把手、逆时针旋转把手、拉开门
 - **无冗余步骤链**：
-  - 拉开门
   - 顺时针旋转把手 -> 拉开门
   - 逆时针旋转把手 -> 拉开门
 

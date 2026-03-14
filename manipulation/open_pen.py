@@ -307,7 +307,11 @@ class OpenPenManipulation(BaseManipulation) :
         clock_wise = self.env.clock_wise[env_id]
         open_flag = self.env.open_bottle_stage[env_id]
         if t == 0:
-            action = "o" if np.random.rand() > 11/20 else "r"
+            # First step is sampled from {lift, rotate}; rotate direction follows task orientation.
+            if np.random.rand() < 0.5:
+                action = 'z'
+            else:
+                action = 'r' if clock_wise else 'o'
             self.env.action_chosen[env_id, t] = action
             return action
         elif abs(dof) < self.env.try_range:
