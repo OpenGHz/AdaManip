@@ -23,6 +23,7 @@ class argument:
         self.ckpt_path = 'checkpoints/ema_nets.pth'
         self.dataset_path = 'demo_data/open_bottle/demo_buffer.zip'
         self.task_name = None
+        self.task_stage = None
         self.policy_mode = 'diffusion'
         self.pred_horizon = 4
         self.obs_horizon = 2
@@ -47,6 +48,7 @@ class DiffusionPolicy:
     def __init__(self, args: argument):
         self.args = args
         self.task_name = getattr(args, 'task_name', None)
+        self.task_stage = getattr(args, 'task_stage', 'manip')
         self.policy_mode = getattr(args, 'policy_mode', 'diffusion')
         if self.policy_mode not in ['diffusion', 'flow_matching']:
             raise ValueError(f"Unsupported policy mode: {self.policy_mode}")
@@ -184,9 +186,9 @@ class DiffusionPolicy:
     def _get_run_log_dir(self):
         current_day = datetime.now().strftime('%b%d')
         current_time = datetime.now().strftime('%H-%M-%S')
-        path_parts = [self.args.logdir]
-        if self.task_name:
-            path_parts.append(self.task_name)
+        task_name = self.task_name if self.task_name else 'unknown_task'
+        task_stage = self.task_stage if self.task_stage else 'manip'
+        path_parts = [self.args.logdir, task_name, task_stage]
         path_parts.extend([current_day, current_time])
         return os.path.join(*path_parts)
 

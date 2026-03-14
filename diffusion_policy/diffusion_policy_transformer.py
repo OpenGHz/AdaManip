@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
+import os
 from typing import Tuple
 from einops import reduce
 from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
@@ -27,6 +28,7 @@ class argument:
         self.ckpt_path = 'checkpoints/ema_nets.pth'
         self.dataset_path = 'demo_data/open_bottle/demo_buffer.zip'
         self.task_name = None
+        self.task_stage = None
         self.pred_horizon = 4
         self.obs_horizon = 2
         self.action_horizon = 1
@@ -46,6 +48,7 @@ class DiffusionPolicyTran:
     def __init__(self, args):
         self.args = args
         self.task_name = getattr(args, 'task_name', None)
+        self.task_stage = getattr(args, 'task_stage', 'manip')
         self.nets = self.build_net(args)
         self.noise_scheduler = self.get_noise_scheduler(args)
         self.normalizer = LinearNormalizer()
@@ -165,6 +168,13 @@ class DiffusionPolicyTran:
         self.nets.load_state_dict(state_dict)
         self.nets = self.nets.to(self.device)
 
+    def _get_run_log_dir(self):
+        current_day = datetime.now().strftime('%b%d')
+        current_time = datetime.now().strftime('%H-%M-%S')
+        task_name = self.task_name if self.task_name else 'unknown_task'
+        task_stage = self.task_stage if self.task_stage else 'manip'
+        return os.path.join(self.args.logdir, task_name, task_stage, current_day, current_time)
+
 
     def train(self):
         # resume training
@@ -201,16 +211,11 @@ class DiffusionPolicyTran:
             num_warmup_steps=500,
             num_training_steps=len(dataloader) * self.args.num_epochs
         )
-        # get current day
-        current_day = datetime.now().strftime('%b%d')
-        current_time = datetime.now().strftime('%H-%M-%S')
-
-        #current_time = datetime.now().strftime('%b%d_%H-%M-%S')
-        log_dir = self.args.logdir + '/' + current_day + '/' + current_time
+        log_dir = self._get_run_log_dir()
         if SummaryWriter is None:
             raise ImportError("tensorboard is required for training but is not installed")
         writer = SummaryWriter(log_dir=log_dir)
-        pth_path = log_dir + '/ema_nets.pth'
+        pth_path = os.path.join(log_dir, 'ema_nets.pth')
         # configure checkpoint
         # topk_manager = TopKCheckpointManager(
         #     save_dir = os.path.join(log_dir, 'checkpoints'),
@@ -334,7 +339,7 @@ class DiffusionPolicyTran:
         # Weights of the EMA model
         # is used for inference
         ema_nets = ema.averaged_model
-        pth_path = log_dir + '/ema_nets.pth' 
+        pth_path = os.path.join(log_dir, 'ema_nets.pth')
         torch.save(ema_nets.state_dict(), pth_path)
 
     # ========= inference  ============

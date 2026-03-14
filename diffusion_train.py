@@ -2,9 +2,9 @@ import argparse
 import os
 
 
-def infer_task_name(dataset_path_list):
+def infer_task_info(dataset_path_list):
     if not dataset_path_list:
-        return None
+        return None, None
 
     first_path = os.path.normpath(dataset_path_list[0])
     base_name = os.path.basename(first_path)
@@ -12,12 +12,42 @@ def infer_task_name(dataset_path_list):
         base_name = os.path.basename(os.path.dirname(first_path))
 
     if not base_name:
-        return None
+        return None, None
 
-    for suffix in ('_adaptive', '_succ', '_gt', '_demo'):
-        if suffix in base_name:
-            return base_name.split(suffix, 1)[0]
-    return os.path.splitext(base_name)[0]
+    name = os.path.splitext(base_name)[0]
+    tokens = [tok for tok in name.split('_') if tok]
+    if not tokens:
+        return None, None
+
+    stage = None
+    task_name = None
+
+    if tokens[0] in {'grasp', 'manip'}:
+        stage = tokens[0]
+        if len(tokens) > 1:
+            task_name = tokens[1]
+    elif tokens[0] == 'open':
+        stage = 'manip'
+        if len(tokens) > 1:
+            task_name = tokens[1]
+    else:
+        if 'grasp' in tokens:
+            grasp_idx = tokens.index('grasp')
+            stage = 'grasp'
+            if grasp_idx + 1 < len(tokens):
+                task_name = tokens[grasp_idx + 1]
+        elif 'manip' in tokens:
+            manip_idx = tokens.index('manip')
+            stage = 'manip'
+            if manip_idx + 1 < len(tokens):
+                task_name = tokens[manip_idx + 1]
+
+    if task_name is None:
+        task_name = tokens[0]
+    if stage is None:
+        stage = 'manip'
+
+    return task_name, stage
 
 def get_args():
     # use parser to get args
@@ -41,6 +71,7 @@ def get_args():
     parser.add_argument('--weight_decay', type=float, default=1e-6)
     parser.add_argument('--logdir', type=str, default='logs')
     parser.add_argument('--task_name', type=str, default=None)
+    parser.add_argument('--task_stage', type=str, default=None, choices=['grasp', 'manip'])
     parser.add_argument('--policy_mode', type=str, default='diffusion', choices=['diffusion', 'flow_matching'])
     parser.add_argument('--flow_sampling_steps', type=int, default=10)
     parser.add_argument('--flow_beta_alpha', type=float, default=1.5)
@@ -78,8 +109,15 @@ def get_args():
 
 if __name__ == '__main__':
     args = get_args()
+    inferred_task_name, inferred_stage = infer_task_info(args.dataset_path)
     if args.task_name is None:
-        args.task_name = infer_task_name(args.dataset_path)
+        args.task_name = inferred_task_name
+    if args.task_stage is None:
+        args.task_stage = inferred_stage
+    if args.task_name is None:
+        args.task_name = 'unknown_task'
+    if args.task_stage is None:
+        args.task_stage = 'manip'
     from diffusion_policy.diffusion_policy_new import DiffusionPolicy
     policy = DiffusionPolicy(args)
     # from diffusion_policy.diffusion_policy_transformer import DiffusionPolicyTran
