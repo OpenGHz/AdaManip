@@ -2,7 +2,6 @@ import torch
 import torch.nn as nn
 import numpy as np
 import os
-import copy
 from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
 from diffusers.schedulers.scheduling_ddim import DDIMScheduler
 from diffusers.optimization import get_scheduler
@@ -93,11 +92,24 @@ class DiffusionPolicy:
         else:
             ema.step(self.nets)
 
-    def _get_ema_state_dict(self, ema, uses_parameters_api, ema_save_model):
+    def _get_ema_state_dict(self, ema, uses_parameters_api):
         if not uses_parameters_api and hasattr(ema, "averaged_model"):
-            return ema.averaged_model.state_dict()
-        ema.copy_to(ema_save_model.parameters())
-        return ema_save_model.state_dict()
+            ema_state = ema.averaged_model.state_dict()
+        else:
+            # For parameters API, materialize EMA parameters into a temporary model.
+            temp_model = self.build_net(self.args).eval().cpu()
+            temp_model.requires_grad_(False)
+            ema.copy_to(temp_model.parameters())
+            ema_state = temp_model.state_dict()
+
+        # diffusers parameters-API EMA tracks parameters only; always refresh buffers
+        # from the current model state to avoid random/stale BatchNorm statistics.
+        param_names = {name for name, _ in self.nets.named_parameters()}
+        online_state = self.nets.state_dict()
+        for name, value in online_state.items():
+            if name not in param_names:
+                ema_state[name] = value.detach().cpu().clone()
+        return ema_state
 
     def build_net(self, args):
         # Initialize Networks
@@ -312,11 +324,8 @@ class DiffusionPolicy:
         )
         ema = None
         ema_uses_parameters_api = False
-        ema_save_model = None
         if self.use_ema:
             ema, ema_uses_parameters_api = self._build_ema_model()
-            ema_save_model = copy.deepcopy(self.nets).eval().to(self.device)
-            ema_save_model.requires_grad_(False)
         optimizer = torch.optim.AdamW(params=self.nets.parameters(),lr=self.args.lr, weight_decay=self.args.weight_decay)
         lr_scheduler = get_scheduler(
             name='cosine',
@@ -385,7 +394,7 @@ class DiffusionPolicy:
                 #writer.add_scalar('Loss/action_loss', np.mean(epoch_action_loss), epoch_idx)
                 if epoch_idx % self.args.save_rate == 0:
                     if self.use_ema:
-                        saved_state_dict = self._get_ema_state_dict(ema, ema_uses_parameters_api, ema_save_model)
+                        saved_state_dict = self._get_ema_state_dict(ema, ema_uses_parameters_api)
                     else:
                         saved_state_dict = self.nets.state_dict()
                     self._save_checkpoint(pth_path, saved_state_dict)
@@ -393,7 +402,7 @@ class DiffusionPolicy:
         # Weights of the EMA model
         # is used for inference
         if self.use_ema:
-            saved_state_dict = self._get_ema_state_dict(ema, ema_uses_parameters_api, ema_save_model)
+            saved_state_dict = self._get_ema_state_dict(ema, ema_uses_parameters_api)
         else:
             saved_state_dict = self.nets.state_dict()
         self._save_checkpoint(pth_path, saved_state_dict)
