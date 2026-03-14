@@ -5,8 +5,8 @@ task:
   grasp: False
 
 model:
-  policy_mode: diffusion
-  # policy_mode: flow_matching
+  # policy_mode: diffusion
+  policy_mode: flow_matching
   obs_horizon: 2
   action_horizon: 1
   pred_horizon: 4
@@ -26,7 +26,9 @@ model:
   # model_path: './ckpt/microwave/microwave_manip.pth'
   # model_path: logs/Mar09/19-17-36/ema_nets.pth
   # diffusion_model_path: logs/Mar10/10-53-38/ema_nets.pth
-  diffusion_model_path: logs/Mar09/19-17-36/ema_nets.pth
+  # diffusion_model_path: logs/Mar09/19-17-36/ema_nets.pth
+  # diffusion_model_path: logs/microwave/manip/Mar14/08-38-56/ema_nets.pth  # diffusion
+  diffusion_model_path: logs/microwave/manip/Mar14/08-39-36/ema_nets.pth  # flow matching
 
 env:
   env_name: "open microwave"

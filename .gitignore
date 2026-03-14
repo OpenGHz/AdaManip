@@ -9,3 +9,4 @@ ckpt/*
 seg_real.py
 sample_real.py
 real_pc_visual.py
+eval_data/
