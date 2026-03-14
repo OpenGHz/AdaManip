@@ -9,6 +9,7 @@ import os
 import collections
 import av
 import shutil
+import time
 
 
 class Mp4VideoWriter:
@@ -146,6 +147,8 @@ class OpenMicroWaveManipulation(BaseManipulation) :
 
     def _build_eval_save_dir(self):
         dataset_path = "eval_open_microwave" + "_" + self.cfg["task"]["policy"] + "_" + str(self.cfg["env"]["asset"]["AssetNum"])+"_eps"+str(self.cfg["task"]["num_episode"])+"_clock"+str(self.cfg["env"]["clockwise"])
+        run_ts = time.strftime("%Y%m%d-%H%M%S", time.localtime())
+        dataset_path = dataset_path + "_" + run_ts
         return './eval_data/'+ dataset_path
 
     def _prepare_save_dir(self, save_dir, purpose):
@@ -286,7 +289,6 @@ class OpenMicroWaveManipulation(BaseManipulation) :
         succ_cnt = 0
         succ_rate = []
         eval_save_dir = self._build_eval_save_dir()
-        self._prepare_save_dir(eval_save_dir, "Evaluation")
         self._init_video_recorder(eval_save_dir)
         for eps in range(eps_num):
             print("eps_{}".format(eps+1))
