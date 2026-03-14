@@ -33,6 +33,7 @@ class argument:
         self.flow_beta_alpha = 1.5
         self.flow_beta_beta = 1.0
         self.flow_tau_cutoff = 0.999
+        self.flow_use_ema = False
         self.DDIM = False
         self.discrete = False
         self.dof_dim = 0
@@ -50,6 +51,7 @@ class DiffusionPolicy:
         self.task_name = getattr(args, 'task_name', None)
         self.task_stage = getattr(args, 'task_stage', 'manip')
         self.policy_mode = getattr(args, 'policy_mode', 'diffusion')
+        self.flow_use_ema = bool(getattr(args, 'flow_use_ema', False))
         if self.policy_mode not in ['diffusion', 'flow_matching']:
             raise ValueError(f"Unsupported policy mode: {self.policy_mode}")
         if not hasattr(self.args, 'flow_sampling_steps') or self.args.flow_sampling_steps <= 0:
@@ -70,6 +72,10 @@ class DiffusionPolicy:
         print("training device:",self.device)
         self.nets.to(self.device)
         print(f"using policy mode: {self.policy_mode}")
+
+        # Diffusion keeps EMA by default; flow matching requires explicit opt-in.
+        self.use_ema = self.policy_mode != 'flow_matching' or self.flow_use_ema
+        print(f"using EMA: {self.use_ema}")
 
     def _build_ema_model(self):
         # diffusers API changed from model-based to parameters-based; support both.
@@ -304,9 +310,13 @@ class DiffusionPolicy:
             # don't kill worker process afte each epoch
             persistent_workers=True
         )
-        ema, ema_uses_parameters_api = self._build_ema_model()
-        ema_save_model = copy.deepcopy(self.nets).eval().to(self.device)
-        ema_save_model.requires_grad_(False)
+        ema = None
+        ema_uses_parameters_api = False
+        ema_save_model = None
+        if self.use_ema:
+            ema, ema_uses_parameters_api = self._build_ema_model()
+            ema_save_model = copy.deepcopy(self.nets).eval().to(self.device)
+            ema_save_model.requires_grad_(False)
         optimizer = torch.optim.AdamW(params=self.nets.parameters(),lr=self.args.lr, weight_decay=self.args.weight_decay)
         lr_scheduler = get_scheduler(
             name='cosine',
@@ -361,7 +371,8 @@ class DiffusionPolicy:
                         writer.add_scalar('Optimizer/lr', cur_lr, tglobal.n*tepoch.total+tepoch.n)
 
                         # update Exponential Moving Average of the model weights
-                        self._step_ema_model(ema, ema_uses_parameters_api)
+                        if self.use_ema:
+                            self._step_ema_model(ema, ema_uses_parameters_api)
 
                         # logging
                         loss_cpu = loss.item()
@@ -373,13 +384,19 @@ class DiffusionPolicy:
                 writer.add_scalar('Loss/train_loss', np.mean(epoch_loss), epoch_idx)
                 #writer.add_scalar('Loss/action_loss', np.mean(epoch_action_loss), epoch_idx)
                 if epoch_idx % self.args.save_rate == 0:
-                    ema_nets = self._get_ema_state_dict(ema, ema_uses_parameters_api, ema_save_model)
-                    self._save_checkpoint(pth_path, ema_nets)
+                    if self.use_ema:
+                        saved_state_dict = self._get_ema_state_dict(ema, ema_uses_parameters_api, ema_save_model)
+                    else:
+                        saved_state_dict = self.nets.state_dict()
+                    self._save_checkpoint(pth_path, saved_state_dict)
                     print(f"save checkpoint in {epoch_idx} epoch")
         # Weights of the EMA model
         # is used for inference
-        ema_nets = self._get_ema_state_dict(ema, ema_uses_parameters_api, ema_save_model)
-        self._save_checkpoint(pth_path, ema_nets)
+        if self.use_ema:
+            saved_state_dict = self._get_ema_state_dict(ema, ema_uses_parameters_api, ema_save_model)
+        else:
+            saved_state_dict = self.nets.state_dict()
+        self._save_checkpoint(pth_path, saved_state_dict)
         
     def infer_action_with_seg(self, pcs, env_state):
         npcs, nstate = self._prepare_policy_inputs(pcs, env_state)
