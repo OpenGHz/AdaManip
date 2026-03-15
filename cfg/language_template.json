@@ -1,0 +1,79 @@
+{
+  "schema_version": "v1",
+  "tasks": {
+    "bottle": {
+      "command": "打开瓶子",
+      "operation_set": ["旋转瓶盖", "向上提起瓶盖"],
+      "minimal_chains": [
+        "向上提起瓶盖",
+        "Nx旋转瓶盖 -> 向上提起瓶盖"
+      ]
+    },
+    "pen": {
+      "command": "打开笔",
+      "operation_set": ["旋转笔盖", "向上提起笔盖"],
+      "minimal_chains": [
+        "向上提起笔盖",
+        "Nx旋转笔盖 -> 向上提起笔盖"
+      ]
+    },
+    "pressure_cooker": {
+      "command": "打开高压锅",
+      "operation_set": ["旋转把手", "向上提起把手"],
+      "minimal_chains": [
+        "向上提起把手",
+        "Nx旋转把手 -> 向上提起把手"
+      ]
+    },
+    "coffee_maker": {
+      "command": "拆卸咖啡机手柄",
+      "operation_set": ["旋转手柄", "拉动手柄"],
+      "minimal_chains": [
+        "拉动手柄",
+        "Nx旋转手柄 -> 拉动手柄"
+      ]
+    },
+    "window": {
+      "command": "打开窗户",
+      "operation_set": ["顺时针旋转把手", "逆时针旋转把手", "拉开窗户"],
+      "minimal_chains": [
+        "顺时针旋转把手 -> 拉开窗户",
+        "逆时针旋转把手 -> 拉开窗户"
+      ]
+    },
+    "door": {
+      "command": "打开门",
+      "operation_set": ["顺时针旋转把手", "逆时针旋转把手", "拉开门"],
+      "minimal_chains": [
+        "顺时针旋转把手 -> 拉开门",
+        "逆时针旋转把手 -> 拉开门"
+      ]
+    },
+    "lamp": {
+      "command": "打开或调节台灯",
+      "operation_set": ["推开关", "顺时针旋转开关", "逆时针旋转开关"],
+      "minimal_chains": [
+        "推开关",
+        "顺时针旋转开关",
+        "逆时针旋转开关"
+      ]
+    },
+    "safe": {
+      "command": "打开保险箱",
+      "operation_set": ["拉门", "顺时针旋转旋钮", "逆时针旋转旋钮"],
+      "minimal_chains": [
+        "拉门",
+        "顺时针旋转旋钮 -> 拉门",
+        "逆时针旋转旋钮 -> 拉门"
+      ]
+    },
+    "microwave": {
+      "command": "打开微波炉",
+      "operation_set": ["拉门", "按按钮"],
+      "minimal_chains": [
+        "拉门",
+        "按按钮 -> 拉门"
+      ]
+    }
+  }
+}

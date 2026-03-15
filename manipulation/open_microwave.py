@@ -141,6 +141,43 @@ class OpenMicroWaveManipulation(BaseManipulation) :
         super().__init__(env, cfg, logger)
         self.video_recorder = None
 
+    def _build_microwave_trajectory_label(self, env_id, start_with_pull, expanded_minimal_chains):
+        clock_wise = int(self.env.clock_wise[env_id].item())
+        if start_with_pull:
+            if clock_wise == 0:
+                attempt_chain = ["拉门"]
+                stage_status = [True]
+                minimal_chain = ["拉门"]
+            else:
+                attempt_chain = ["拉门", "按按钮", "拉门"]
+                stage_status = [False, True, True]
+                minimal_chain = ["按按钮", "拉门"]
+        else:
+            attempt_chain = ["按按钮", "拉门"]
+            stage_status = [True, True]
+            minimal_chain = ["按按钮", "拉门"]
+
+        try:
+            minimal_chain_id = expanded_minimal_chains.index(minimal_chain)
+        except ValueError as exc:
+            raise RuntimeError(f"minimal_chain {minimal_chain} not found in expanded_minimal_chains") from exc
+
+        command_chains, command_chain_ids = self.match_command_chains(
+            attempt_chain=attempt_chain,
+            stage_status=stage_status,
+            expanded_minimal_chains=expanded_minimal_chains,
+        )
+
+        return {
+            "minimal_chain_id": minimal_chain_id,
+            "minimal_chain": minimal_chain,
+            "attempt_chain": attempt_chain,
+            "stage_status": stage_status,
+            "command_chains": command_chains,
+            "command_chain_ids": command_chain_ids,
+            "success": True,
+        }
+
     def _build_collect_save_dir(self):
         dataset_path = "open_microwave" + "_" + self.cfg["task"]["policy"] + "_" + str(self.cfg["env"]["asset"]["AssetNum"])+"_eps"+str(self.cfg["task"]["num_episode"])+"_clock"+str(self.cfg["env"]["clockwise"])
         return './demo_data/'+ dataset_path
@@ -360,19 +397,27 @@ class OpenMicroWaveManipulation(BaseManipulation) :
         self.env.actions = action_with_gripper
         for env_id in range(self.env.num_envs):
             self.eps_buffer[env_id].add(pc[env_id], env_state[env_id],action_with_gripper[env_id])
+            self.append_frame_label(env_id)
         self._record_video_frame()
 
     def collect_manip_data(self):
         # move to the handle
         eps_num = self.cfg["task"]["num_episode"]
         policy = self.cfg["task"]["policy"]
-        rot_quat = torch.tensor([ 0, 0, -0.1305262, 0.9914449], device=self.env.device)
+        template_path, task_spec = self.load_task_language_template("microwave")
+        expanded_minimal_chains = self.build_expanded_minimal_chains(task_spec["minimal_chains"])
+
         demo_buffer = Experience()
+        trajectory_records = []
+        frame_records = []
+        saved_episode_id = 0
+
         save_dir = self._build_collect_save_dir()
         self._prepare_save_dir(save_dir, "Collection")
         self._init_video_recorder(save_dir)
         for eps in range(eps_num):
             self.eps_buffer = [Episode_Buffer() for _ in range(self.env.num_envs)]
+            self.init_episode_frame_records(self.env.num_envs)
             print("eps_{}".format(eps+1))
             self.env.reset()
             if self.video_recorder is not None:
@@ -382,12 +427,15 @@ class OpenMicroWaveManipulation(BaseManipulation) :
             handle_pos = pose[:,:7].clone()
             button_pos = pose[:,7:].clone()
             self.env.gripper = torch.zeros((self.env.num_envs,1), device=self.env.device)
+            episode_start_with_pull = False
             try:
                 if policy == "succ":
                     # succ policy under gt state
                     if self.env.clock_wise[0] == 1:
+                        episode_start_with_pull = False
                         # cannot directly open door
                         # push button
+                        self.set_current_step(0, "按按钮")
                         button_pos[:, 0] += self.env.gripper_length*2 + 0.012
                         for i in range(2):
                             self.process_data(button_pos)
@@ -409,6 +457,7 @@ class OpenMicroWaveManipulation(BaseManipulation) :
                                 self.env.step(button_pos)
                         self.env.gripper = torch.zeros((self.env.num_envs,1), device=self.env.device)
 
+                        self.set_current_step(1, "拉门")
                         handle_pos[:, 0] += self.env.gripper_length*2
                         for i in range(2):
                             self.process_data(handle_pos)
@@ -437,7 +486,9 @@ class OpenMicroWaveManipulation(BaseManipulation) :
                             for j in range(15):
                                 self.env.step(pred_pose)
                     else:
+                        episode_start_with_pull = True
                         # directly open door
+                        self.set_current_step(0, "拉门")
                         handle_pos[:, 0] += self.env.gripper_length*2
                         for i in range(2):
                             self.process_data(handle_pos)
@@ -470,8 +521,10 @@ class OpenMicroWaveManipulation(BaseManipulation) :
                     down_q = torch.stack(self.env.num_envs * [torch.tensor([0.7071068, 0.7071068, 0, 0])]).to(self.env.device).view((self.env.num_envs, 4))
                     step_size = 0.045
                     start_with_pull = np.random.rand() < 0.5
+                    episode_start_with_pull = start_with_pull
 
                     if start_with_pull:
+                        self.set_current_step(0, "拉门")
                         handle_pos[:, 0] += self.env.gripper_length*2
                         for i in range(2):
                             self.process_data(handle_pos)
@@ -500,6 +553,7 @@ class OpenMicroWaveManipulation(BaseManipulation) :
                     
                     if start_with_pull and self.env.clock_wise[0] == 0:
                         # continue open door
+                        self.set_current_step(0, "拉门")
                         for i in range(6):
                             handle_q = self.env.rigid_body_tensor[:, 3:7]
                             open_dir = quat_axis(handle_q, axis=2)
@@ -511,6 +565,10 @@ class OpenMicroWaveManipulation(BaseManipulation) :
                             for j in range(15):
                                 self.env.step(pred_pose)
                     else:
+                        button_step_idx = 1 if start_with_pull else 0
+                        pull_step_idx = 2 if start_with_pull else 1
+
+                        self.set_current_step(button_step_idx, "按按钮")
                         self.env.gripper = torch.zeros((self.env.num_envs,1), device=self.env.device)
                         keep_pose = self.env.hand_rigid_body_tensor.clone()
                         self.process_data(keep_pose)
@@ -544,6 +602,7 @@ class OpenMicroWaveManipulation(BaseManipulation) :
                                 self.env.step(button_pos)
                         self.env.gripper = torch.zeros((self.env.num_envs,1), device=self.env.device)
 
+                        self.set_current_step(pull_step_idx, "拉门")
                         keep_pose = self.env.hand_rigid_body_tensor.clone()
                         keep_pose[:, 0] += self.env.gripper_length
                         self.process_data(keep_pose)
@@ -581,15 +640,38 @@ class OpenMicroWaveManipulation(BaseManipulation) :
                 for env_id in range(self.env.num_envs):
                     if (torch.abs(self.env.one_dof_tensor[env_id, 0]) > np.pi/7).cpu().item():
                         demo_buffer.append(self.eps_buffer[env_id])
+                        traj_record = self._build_microwave_trajectory_label(
+                            env_id=env_id,
+                            start_with_pull=episode_start_with_pull,
+                            expanded_minimal_chains=expanded_minimal_chains,
+                        )
+                        traj_record["episode_id"] = saved_episode_id
+                        frame_start = len(frame_records)
+                        env_frames = self._episode_frame_records[env_id]
+                        frame_records.extend(env_frames)
+                        frame_end = len(frame_records)
+                        traj_record["frame_range"] = [frame_start, frame_end]
+                        trajectory_records.append(traj_record)
+                        saved_episode_id += 1
                         print(f"Env {env_id} Succeeded")
             finally:
                 if self.video_recorder is not None:
                     self.video_recorder.finish_episode()
+                self.clear_episode_frame_records()
 
         if self.cfg['env']['collectData']:
             save_path = save_dir + '/demo_data.zip'
             os.makedirs(save_dir, exist_ok=True)
             demo_buffer.save(save_path)
+            self.save_language_sidecars(
+                save_dir=save_dir,
+                template_path=template_path,
+                task_name="microwave",
+                task_spec=task_spec,
+                expanded_minimal_chains=expanded_minimal_chains,
+                trajectory_records=trajectory_records,
+                frame_records=frame_records,
+            )
         self.video_recorder = None
         
     def action_choose(self,t,index,one_motion,two_motion):

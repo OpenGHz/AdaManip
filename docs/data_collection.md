@@ -73,26 +73,38 @@
 {
   "schema_version": "v1",
   "generated_from": "language_template.json",
-  "tasks": {
-    "bottle": {
-      "command": "打开瓶子",
-      "operation_set": ["旋转瓶盖", "向上提起瓶盖"],
-      "expanded_minimal_chains": [
-        ["向上提起瓶盖"],
-        ["1x旋转瓶盖", "向上提起瓶盖"],
-        ["2x旋转瓶盖", "向上提起瓶盖"],
-        ["3x旋转瓶盖", "向上提起瓶盖"]
-      ]
+  "task": "bottle",
+  "command": "打开瓶子",
+  "operation_set": ["旋转瓶盖", "向上提起瓶盖"],
+  "expanded_minimal_chains": [
+    ["向上提起瓶盖"],
+    ["1x旋转瓶盖", "向上提起瓶盖"],
+    ["2x旋转瓶盖", "向上提起瓶盖"],
+    ["3x旋转瓶盖", "向上提起瓶盖"]
+  ],
+  "attempt_chain_counts": [
+    {
+      "attempt_chain": ["向上提起瓶盖"],
+      "count": 12
+    },
+    {
+      "attempt_chain": ["1x旋转瓶盖", "向上提起瓶盖"],
+      "count": 25
+    },
+    {
+      "attempt_chain": ["1x旋转瓶盖", "向上提起瓶盖", "1x旋转瓶盖", "向上提起瓶盖"],
+      "count": 7
     }
-  }
+  ]
 }
 ```
 
-约定：`expanded_minimal_chains` 的索引即最短链 id（从 0 开始）。
+约定：`expanded_minimal_chains` 的索引即最短链 id（从 0 开始）；`generated_from` 用相对路径。
+约定：`attempt_chain_counts` 统计本次数据中每种完整 `attempt_chain` 出现次数，计数口径按轨迹条数（不是帧数）。
 
 ## 6. 轨迹级语言标注（双链）
 
-每条轨迹必须保存两类链：
+`trajectory_language.jsonl` 记录本次任务重每条轨迹的语言标注。每条轨迹必须保存两类链：
 
 1. `minimal_chain`
 - 最短归约链，对应 `minimal_chain_id` 与链内容（用于类别/任务级监督）。
@@ -131,8 +143,6 @@
 ```json
 {
   "episode_id": 17,
-  "task": "bottle",
-  "command": "打开瓶子",
   "minimal_chain_id": 1,
   "minimal_chain": ["1x旋转瓶盖", "向上提起瓶盖"],
   "attempt_chain": ["1x旋转瓶盖", "向上提起瓶盖", "1x旋转瓶盖", "向上提起瓶盖"],
@@ -194,3 +204,4 @@
 4. `third_party/ada_manip/cfg/language_template.json` 不包含 `expand`、`n_min`、`n_max`、`expanded` 字段。
 5. `language_expanded.json` 使用 `expanded_minimal_chains`，类型为 `List[List[str]]`。
 6. `command_chains` 中每条链都必须可在任务级 `expanded_minimal_chains` 中找到同值链，且前缀匹配 `prefix`；`command_chain_ids` 必须与之逐项对应。
+7. `language_expanded.json` 必须包含 `attempt_chain_counts`，且其 `count` 总和等于 `trajectory_language.jsonl` 中轨迹总数。

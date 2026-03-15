@@ -3,6 +3,8 @@ from envs.base_env import BaseEnv
 from logging import Logger
 import pytorch3d.transforms as tf
 import torch
+import os
+import json
 
 
 def _sqrt_positive_part(x: torch.Tensor) -> torch.Tensor:
@@ -21,6 +23,125 @@ class BaseManipulation :
         self.env = env
         self.cfg = cfg
         self.logger = logger
+        self._current_step_index = 0
+        self._current_step_operation = ""
+        self._episode_frame_records = None
+
+    def get_language_template_path(self):
+        cur_dir = os.path.dirname(os.path.abspath(__file__))
+        return os.path.normpath(os.path.join(cur_dir, "..", "cfg", "language_template.json"))
+
+    def parse_chain_text(self, chain_text):
+        return [stage.strip() for stage in chain_text.split("->") if stage.strip()]
+
+    def load_task_language_template(self, task_name, template_path=None):
+        if template_path is None:
+            template_path = self.get_language_template_path()
+        if not os.path.exists(template_path):
+            raise FileNotFoundError(f"Language template not found: {template_path}")
+        with open(template_path, "r", encoding="utf-8") as f:
+            template = json.load(f)
+
+        tasks = template.get("tasks", {})
+        if task_name not in tasks:
+            raise KeyError(f"Task '{task_name}' missing in language template: {template_path}")
+        task_spec = tasks[task_name]
+        if "command" not in task_spec or "operation_set" not in task_spec or "minimal_chains" not in task_spec:
+            raise KeyError(f"Task '{task_name}' missing required fields in language template")
+        return template_path, task_spec
+
+    def build_expanded_minimal_chains(self, minimal_chains):
+        # Default strategy: parse concrete chains as-is. Tasks with Nx can override.
+        return [self.parse_chain_text(chain_text) for chain_text in minimal_chains]
+
+    def match_command_chains(self, attempt_chain, stage_status, expanded_minimal_chains):
+        first_fail = None
+        for i, ok in enumerate(stage_status):
+            if not ok:
+                first_fail = i
+                break
+        end_idx = first_fail if first_fail is not None else len(attempt_chain) - 1
+        prefix = attempt_chain[:end_idx + 1]
+
+        command_chains = []
+        command_chain_ids = []
+        for idx, chain in enumerate(expanded_minimal_chains):
+            if len(chain) >= len(prefix) and chain[:len(prefix)] == prefix:
+                command_chains.append(chain)
+                command_chain_ids.append(idx)
+
+        if len(command_chains) == 0:
+            raise RuntimeError(f"No command_chains matched prefix={prefix}; task logic or labels are inconsistent")
+        return command_chains, command_chain_ids
+
+    def relative_path_from(self, path, start_dir):
+        return os.path.relpath(path, start=start_dir)
+
+    def set_current_step(self, step_index, step_operation):
+        self._current_step_index = int(step_index)
+        self._current_step_operation = step_operation
+
+    def init_episode_frame_records(self, num_envs):
+        self._episode_frame_records = [[] for _ in range(num_envs)]
+
+    def clear_episode_frame_records(self):
+        self._episode_frame_records = None
+
+    def append_frame_label(self, env_id):
+        if self._episode_frame_records is None:
+            return
+        self._episode_frame_records[env_id].append({
+            "step_index": self._current_step_index,
+            "step_operation": self._current_step_operation,
+        })
+
+    def save_language_sidecars(self,
+                               save_dir,
+                               template_path,
+                               task_name,
+                               task_spec,
+                               expanded_minimal_chains,
+                               trajectory_records,
+                               frame_records):
+        relative_template_path = self.relative_path_from(template_path, save_dir)
+        attempt_chain_count_map = {}
+        attempt_chain_order = []
+        for record in trajectory_records:
+            attempt_chain = record.get("attempt_chain")
+            if attempt_chain is None:
+                continue
+            chain_key = tuple(attempt_chain)
+            if chain_key not in attempt_chain_count_map:
+                attempt_chain_count_map[chain_key] = 0
+                attempt_chain_order.append(chain_key)
+            attempt_chain_count_map[chain_key] += 1
+
+        attempt_chain_counts = [
+            {
+                "attempt_chain": list(chain_key),
+                "count": attempt_chain_count_map[chain_key],
+            }
+            for chain_key in attempt_chain_order
+        ]
+
+        expanded_payload = {
+            "schema_version": "v1",
+            "generated_from": relative_template_path,
+            "task": task_name,
+            "command": task_spec["command"],
+            "operation_set": task_spec["operation_set"],
+            "expanded_minimal_chains": expanded_minimal_chains,
+            "attempt_chain_counts": attempt_chain_counts,
+        }
+
+        with open(os.path.join(save_dir, "language_expanded.json"), "w", encoding="utf-8") as f:
+            json.dump(expanded_payload, f, ensure_ascii=False, indent=2)
+
+        with open(os.path.join(save_dir, "trajectory_language.jsonl"), "w", encoding="utf-8") as f:
+            json.dump(trajectory_records, f, ensure_ascii=False, indent=2)
+
+        with open(os.path.join(save_dir, "frame_language.jsonl"), "w", encoding="utf-8") as f:
+            json.dump(frame_records, f, ensure_ascii=False, indent=2)
 
     @abstractclassmethod
     def collect_data(self, obs, eval=False) :
