@@ -1,7 +1,7 @@
 task:
   task_name: "open_microwave"
   policy: "adaptive"
-  num_episode: 10
+  num_episode: 25
   grasp: False
 
 env:
