@@ -1,40 +1,8 @@
 # AdaManip Training Data Loading Notes
 
-## 1. Data Storage Format
+Please use `docs/data_collection.md` as the source of truth for collection-side storage and writing semantics.
 
-AdaManip stores training data in a zarr file, usually `demo_data.zip`.
-
-The important fields are:
-
-- `data/pcs`: point cloud for each saved frame.
-- `data/env_state`: low-dimensional observation for each saved frame.
-- `data/action`: action for each saved frame.
-- `meta/episode_ends`: cumulative frame offsets marking the end of each episode.
-
-`episode_ends` is the key to episode isolation. For example, if `episode_ends = [10, 25, 42]`, then:
-
-- episode 0 uses frames `[0, 10)`
-- episode 1 uses frames `[10, 25)`
-- episode 2 uses frames `[25, 42)`
-
-So all frames are concatenated into one long array, but episode boundaries are preserved explicitly.
-
-## 2. How Episodes Are Written During Collection
-
-During microwave data collection, each environment instance keeps its own `Episode_Buffer`.
-
-The collection flow is:
-
-1. Create one `Episode_Buffer` per environment.
-2. Every call to `process_data()` appends one `(pc, env_state, action)` frame to that environment's buffer.
-3. After the rollout, each successful environment buffer is appended into the global `Experience` buffer.
-4. At the end, `Experience.save()` writes everything into one zarr file.
-
-This means one saved episode corresponds to one successful environment rollout.
-
-For microwave collection specifically, one outer rollout loop may generate multiple saved episodes, because `num_envs` environments run in parallel and each successful env is appended separately.
-
-## 3. Multi-File Dataset Merge Logic
+## 1. Multi-File Dataset Merge Logic
 
 `ManipDataset` accepts `dataset_path` as a list.
 
@@ -45,7 +13,7 @@ When multiple zarr files are provided:
 
 So multiple files behave like one large dataset, but episode boundaries remain correct.
 
-## 4. How Multi-Frame Windows Are Built
+## 2. How Multi-Frame Windows Are Built
 
 Training uses `ManipDataset` in `dataset/dataset.py`.
 
@@ -70,11 +38,11 @@ So each sample means:
 
 Because `pad_after` is currently set to `pred_horizon`, every frame in an episode can become one training sample.
 
-## 5. Padding Rules at Episode Boundaries
+## 3. Padding Rules at Episode Boundaries
 
 Since both input and output are multi-frame, the code pads at episode boundaries instead of dropping boundary samples.
 
-### 5.1 Observation Padding at Episode Start
+### 3.1 Observation Padding at Episode Start
 
 If there are not enough past frames to fill `obs_horizon`, the code repeats the first available observation frame.
 
@@ -84,7 +52,7 @@ Example with `obs_horizon = 2` at the first frame of an episode:
 
 So observation padding is left-padding by repeating the first frame.
 
-### 5.2 Action Padding at Episode End
+### 3.2 Action Padding at Episode End
 
 If there are not enough future actions to fill `pred_horizon`, the code repeats the last available action.
 
@@ -94,7 +62,7 @@ Example with `pred_horizon = 4` and only one future action left:
 
 So action padding is right-padding by repeating the last action.
 
-### 5.3 Practical Meaning
+### 3.3 Practical Meaning
 
 This gives the following behavior:
 
@@ -103,7 +71,7 @@ This gives the following behavior:
 
 The implementation keeps boundary frames trainable instead of discarding them.
 
-## 6. Why Windows Never Cross Different Episodes
+## 4. Why Windows Never Cross Different Episodes
 
 A training sample cannot cross episode boundaries.
 
@@ -118,7 +86,7 @@ So even when the model needs history before the first frame or future actions af
 
 This prevents the jump/discontinuity issue that would happen if one window mixed frames from different episodes.
 
-## 7. Training Order: Whole Episode or Random Switching?
+## 5. Training Order: Whole Episode or Random Switching?
 
 Training does not finish one episode before switching to another.
 
@@ -136,7 +104,7 @@ So during training:
 - one minibatch can already contain windows from many different episodes;
 - training is supervised over shuffled windows, not sequential episode-by-episode rollout.
 
-## 8. Direct Answers to the Main Questions
+## 6. Direct Answers to the Main Questions
 
 ### Q1. Is there padding because the model input and output are multi-frame?
 
@@ -157,7 +125,7 @@ No.
 
 Training windows from all episodes are shuffled together, so the training loop randomly switches between episodes throughout optimization.
 
-## 9. Notes About the Current Implementation
+## 7. Notes About the Current Implementation
 
 A few code details are worth keeping in mind:
 

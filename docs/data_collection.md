@@ -11,9 +11,43 @@
 3. 含 `Nx` 的链在采集后按实际轨迹统计进行离散展开，避免训练时动态解析。
 4. 同时保存三层语言标注：任务级、轨迹级、帧级。
 
-## 2. 输出文件（外挂）
+## 2. 采集主数据格式与 Episode 写入
 
-每个采集数据目录建议包含：
+### 2.1 主数据格式（zarr）
+
+AdaManip 的主训练数据存储在 zarr 文件中，通常为 `demo_data.zip`。核心字段为：
+
+1. `data/pcs`：每帧点云。
+2. `data/env_state`：每帧低维状态。
+3. `data/action`：每帧动作。
+4. `meta/episode_ends`：每条 episode 的结束帧累计偏移。
+
+`episode_ends` 是 episode 边界的唯一依据。例如 `episode_ends = [10, 25, 42]` 时：
+
+1. episode 0 对应帧区间 `[0, 10)`。
+2. episode 1 对应帧区间 `[10, 25)`。
+3. episode 2 对应帧区间 `[25, 42)`。
+
+因此主数组是按帧串接存储，但 episode 通过 `episode_ends` 明确隔离。
+
+### 2.2 采集阶段 Episode 写入语义（当前实现）
+
+以 microwave 采集实现为例，当前写入流程为：
+
+1. 每轮 rollout 开始时，为每个并行环境创建一个 `Episode_Buffer`。
+2. 每次执行 `process_data()` 时，向对应环境缓冲追加一帧 `(pc, env_state, action)`。
+3. rollout 结束后，仅将成功环境对应的 `Episode_Buffer` 追加到全局 `Experience`。
+4. 采集结束时，通过 `Experience.save()` 写出单个 zarr 文件。
+
+含义：
+
+1. 一个成功环境轨迹对应一个保存后的 episode。
+2. 一轮外层 rollout 可产出多个保存 episode（因为 `num_envs` 并行，按成功环境分别落盘）。
+3. 当前语言 sidecar 中 `episode_id` 也是按“成功轨迹”递增，与保存进 zarr 的 episode 一一对应。
+
+## 3. 输出文件（外挂）
+
+每个采集数据目录包含：
 
 1. `demo_data.zip`
 - 现有 zarr 数据，保持不变：`data/pcs`, `data/env_state`, `data/action`, `meta/episode_ends`。
@@ -32,7 +66,7 @@
 - `third_party/ada_manip/cfg/language_template.json`
 - 该文件作为所有任务共享配置，采集时从该路径读取。
 
-## 3. 为什么模板不包含 expand 属性
+## 4. 为什么模板不包含 expand 属性
 
 结论：模板层不放 `expand`、`n_min/n_max`、`expanded`。
 
@@ -45,7 +79,7 @@
 1. 采集前读取模板（抽象链，允许 `Nx` 占位）。
 2. 采集后根据实际轨迹统计生成 `language_expanded.json`（事实链，无 `Nx`）。
 
-## 4. 统一任务语言模板格式
+## 5. 统一任务语言模板格式
 
 统一使用 JSON。模板文件固定路径为 `third_party/ada_manip/cfg/language_template.json`。示例：
 
@@ -65,7 +99,7 @@
 }
 ```
 
-## 5. 采集后展开配置格式
+## 6. 采集后展开配置格式
 
 `language_expanded.json` 记录本次任务采集实际出现的全部最优（无冗余步骤）离散链（全部轨迹的minimal_chain的集合）：
 
@@ -102,7 +136,7 @@
 约定：`expanded_minimal_chains` 的索引即最短链 id（从 0 开始）；`generated_from` 用相对路径。
 约定：`attempt_chain_counts` 统计本次数据中每种完整 `attempt_chain` 出现次数，计数口径按轨迹条数（不是帧数）。
 
-## 6. 轨迹级语言标注（双链）
+## 7. 轨迹级语言标注（双链）
 
 `trajectory_language.jsonl` 记录本次任务重每条轨迹的语言标注。每条轨迹必须保存两类链：
 
@@ -158,7 +192,7 @@
 
 确定化约定：`frame_range` 使用半开区间 `[start, end)`。
 
-## 7. 帧级语言标注（operation-only）
+## 8. 帧级语言标注（operation-only）
 
 帧标签使用 `step_operation`，直接等于原子操作名，不带 `Nx`。
 
@@ -175,7 +209,7 @@
 1. `step_index` 指向 `attempt_chain` 的当前步骤索引（从 0 开始）。
 2. `step_operation` 为原子操作名（属于 `operation_set`）。
 
-## 8. Bottle 任务示例（端到端）
+## 9. Bottle 任务示例（端到端）
 
 ### 8.1 抽象模板
 - `minimal_chains`:
@@ -196,7 +230,7 @@
 - 所有旋转阶段帧：`step_operation = "旋转瓶盖"`。
 - 所有提起阶段帧：`step_operation = "向上提起瓶盖"`。
 
-## 9. 最小验收标准
+## 10. 最小验收标准
 
 1. 数据目录中存在 `language_expanded.json`。
 2. `trajectory_language.jsonl` 每条轨迹同时包含 `minimal_chain_id`、`minimal_chain`、`attempt_chain`、`stage_status`、`command_chains`、`command_chain_ids`。
