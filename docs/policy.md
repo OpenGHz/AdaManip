@@ -291,3 +291,120 @@ sample action trajectory x(B,H,action_dim) + timestep ---> ConditionalUnet1D ---
 - action_dim: 任务相关（如 9 或 10）
 
 以上参数由具体任务 yaml 和训练脚本共同决定。
+
+---
+
+## 9) 文档设计: 在条件向量中加入语言命令
+
+本节是文档层设计，描述后续代码改造目标。当前代码尚未实现语言分支。
+
+### 9.1 语言输入
+
+输入为一条任务指令句子，例如：
+
+- "open the coffee machine handle"
+- "push the microwave button then pull the door"
+
+可选文本编码器：
+
+1. sentence-transformers/all-MiniLM-L6-v2: 输出维度 384
+2. m3e-small: 输出维度 512
+
+设语言原始向量为 lang_raw，维度为 D_lang_raw，其中 D_lang_raw in {384, 512}。
+
+### 9.2 维度对齐（推荐）
+
+为减少 U-Net 条件维度膨胀，先做一个语言投影层：
+
+- lang_proj = MLP(lang_raw)
+- 结构建议: Linear(D_lang_raw -> 256) + LayerNorm + Mish + Linear(256 -> D_lang)
+- 默认 D_lang 建议 128（轻量）或 256（表达更强）
+
+说明：
+
+- 该 MLP 仅用于对齐维度与分布，不替代文本编码器。
+- 若使用冻结文本编码器，lang_proj 仍可训练。
+
+### 9.3 与现有条件融合方式
+
+当前条件构造（无语言）为：
+
+- obs_features = concat(pc_feat, npose)  # (B, T_obs, obs_dim)
+- obs_flat = flatten(obs_features)       # (B, T_obs * obs_dim)
+- cond_dim = 256 + T_obs * obs_dim
+
+推荐融合方式 A（最小改动，优先）：
+
+- global_cond = concat(obs_flat, lang_proj)
+- 新条件维度:
+  cond_dim_new = 256 + T_obs * obs_dim + D_lang
+
+推荐融合方式 B（可选，控制参数量）：
+
+- 先对 obs_flat 做压缩 MLP 到 D_obs_compact
+- 再 concat(obs_compact, lang_proj)
+- 适用于 T_obs 和 obs_dim 较大导致参数增多场景
+
+推荐融合方式 C（更强但改动更大）：
+
+- 将语言作为 token，与时序观测 token 做 cross-attention 后再进入 U-Net
+- 需要新增 attention 模块，不适合最小改动路径
+
+### 9.4 输入输出流图（加入语言后）
+
+```text
+text command -----------------> Text Encoder -----------------> lang_raw(B,D_raw)
+                                                             |
+                                                             v
+                                                     Lang MLP/Proj
+                                                             |
+                                                             v
+                                                        lang_proj(B,D_lang)
+
+pc(B,T,N,C) ---> PointNet2 ---> pc_feat(B,T,feat_dim)
+env_state(B,T,low_obs_dim) ---------------------------+
+                                                      |
+                      concat -> obs_feat(B,T,obs_dim) v
+                      flatten -> obs_flat(B,T*obs_dim)
+
+obs_flat + lang_proj + time_emb(256)
+                |
+                v
+       ConditionalUnet1D(sample,timestep,global_cond)
+                |
+                v
+          pred(B,H,action_dim)
+```
+
+### 9.5 训练与推理约定
+
+1. 训练时同一轨迹内默认共享一条 command 文本。
+2. 推理时若 command 变化，必须重编码语言向量并更新条件。
+3. 为保证复现，训练日志应记录:
+   - text encoder 名称与版本
+   - 是否冻结编码器
+   - D_lang 与 lang_proj 结构
+
+### 9.6 对现有维度公式的扩展
+
+现有：
+
+- obs_dim = feat_dim + low_obs_dim
+- cond_dim = 256 + T_obs * obs_dim
+
+扩展后（融合方式 A）：
+
+- obs_dim_lang = obs_dim  # 不变
+- cond_dim_lang = 256 + T_obs * obs_dim + D_lang
+
+其中 D_lang 建议默认值：
+
+- D_lang=128（参数开销小，作为首选起点）
+
+### 9.7 与当前实现状态
+
+当前代码状态：
+
+1. 已有 global_cond 单入口，适合追加语言向量。
+2. 尚无文本编码器、语言投影层、语言数据读取逻辑。
+3. 本节仅定义文档规范，代码改造需另行实施。
