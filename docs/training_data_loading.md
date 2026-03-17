@@ -134,3 +134,94 @@ A few code details are worth keeping in mind:
 - The comment says "data normalized in dataset", but `ManipDataset` itself does not do explicit normalization.
 
 These do not affect episode isolation, but they are useful details if the training pipeline is modified later.
+
+## 8. Language Sampling During Training
+
+This section describes the language-conditioning sampling path for each training sample.
+
+Prerequisite files:
+
+- `trajectory_language.jsonl`
+- `language_embedding_dict.json`
+
+### 8.1 Step 1: map sample to episode_id
+
+For one dataset sample index `sample_idx`, `ManipDataset.indices[sample_idx]` gives:
+
+- `action_start_idx`
+- `action_end_idx`
+- `obs_start_idx`
+- `obs_end_idx`
+
+Use `action_start_idx` (or equivalently `obs_end_idx - 1`) as the anchor frame index `frame_idx`.
+
+Given global `episode_ends` (strictly increasing), compute:
+
+- `episode_id = searchsorted(episode_ends, frame_idx, side="right")`
+
+This works because each episode is a half-open range:
+
+- episode 0: `[0, episode_ends[0])`
+- episode 1: `[episode_ends[0], episode_ends[1])`
+- ...
+
+### 8.2 Step 2: fetch trajectory language entry
+
+From `trajectory_language.jsonl`, fetch the record whose `episode_id` equals the computed `episode_id`.
+
+Required field in that record:
+
+- `command_chain_ids` (a non-empty list of candidate chain ids)
+
+### 8.3 Step 3: uniformly sample one chain_id
+
+Sample one id uniformly from `command_chain_ids`:
+
+- `chain_id = random.choice(command_chain_ids)`
+
+Uniform means each candidate id has probability `1 / len(command_chain_ids)`.
+
+### 8.4 Step 4: lookup embedding from dictionary
+
+Load `language_embedding_dict.json` once at dataset initialization.
+
+Then fetch chain embedding by id:
+
+- `chain_embedding = embedding_dict["expanded_minimal_chains"][chain_id]`
+
+Optionally, if operation-level conditioning is needed for another training target:
+
+- `op_embedding = embedding_dict["operation_set"][operation_str]`
+
+### 8.5 Pseudocode
+
+```python
+# preloaded at dataset init
+episode_ends: np.ndarray
+traj_lang: Dict[int, dict]   # key = episode_id
+emb_dict: dict
+
+def sample_language_embedding(sample_idx):
+	action_start_idx, action_end_idx, obs_start_idx, obs_end_idx = indices[sample_idx]
+	frame_idx = action_start_idx
+
+	episode_id = int(np.searchsorted(episode_ends, frame_idx, side="right"))
+	traj_item = traj_lang[episode_id]
+
+	chain_ids = traj_item["command_chain_ids"]
+	chain_id = int(np.random.choice(chain_ids))
+
+	chain_embedding = np.asarray(
+		emb_dict["expanded_minimal_chains"][chain_id],
+		dtype=np.float32,
+	)
+	return chain_id, chain_embedding
+```
+
+### 8.6 Integrity checks (recommended)
+
+At dataset startup, validate:
+
+- every `episode_id` in zarr has one trajectory-language record;
+- every `command_chain_ids` is non-empty;
+- every sampled `chain_id` is in `[0, len(expanded_minimal_chains) - 1]`.
