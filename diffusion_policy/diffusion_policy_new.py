@@ -33,6 +33,9 @@ class argument:
         self.flow_beta_beta = 1.0
         self.flow_tau_cutoff = 0.999
         self.flow_use_ema = False
+        self.use_language_conditioning = False
+        self.language_input_dim = 512
+        self.language_proj_dim = 128
         self.DDIM = False
         self.discrete = False
         self.dof_dim = 0
@@ -51,6 +54,9 @@ class DiffusionPolicy:
         self.task_stage = getattr(args, 'task_stage', 'manip')
         self.policy_mode = getattr(args, 'policy_mode', 'diffusion')
         self.flow_use_ema = bool(getattr(args, 'flow_use_ema', False))
+        self.use_language_conditioning = bool(getattr(args, 'use_language_conditioning', False))
+        self.language_input_dim = int(getattr(args, 'language_input_dim', 512))
+        self.language_proj_dim = int(getattr(args, 'language_proj_dim', 128))
         if self.policy_mode not in ['diffusion', 'flow_matching']:
             raise ValueError(f"Unsupported policy mode: {self.policy_mode}")
         if not hasattr(self.args, 'flow_sampling_steps') or self.args.flow_sampling_steps <= 0:
@@ -119,9 +125,21 @@ class DiffusionPolicy:
         self.action_dim = args.action_dim
         self.low_obs_dim = 9 + 9 + 7 + self.args.dof_dim + self.action_dim # no gripper info in prev_action obs
         self.obs_dim = self.low_obs_dim + args.feat_dim
+        cond_dim = self.obs_dim * args.obs_horizon
+
+        language_proj = None
+        if self.use_language_conditioning:
+            cond_dim += self.language_proj_dim
+            language_proj = nn.Sequential(
+                nn.Linear(self.language_input_dim, 256),
+                nn.LayerNorm(256),
+                nn.Mish(),
+                nn.Linear(256, self.language_proj_dim),
+            )
+
         noise_pred_net = ConditionalUnet1D(
             input_dim=self.action_dim,
-            global_cond_dim=self.obs_dim*args.obs_horizon,
+            global_cond_dim=cond_dim,
             cond_predict_scale=True,
             local_cond_dim=None
         )
@@ -130,6 +148,8 @@ class DiffusionPolicy:
             'vision_encoder': vision_encoder,
             'noise_pred_net': noise_pred_net
         })
+        if language_proj is not None:
+            nets['language_proj'] = language_proj
         return nets
 
 
@@ -210,10 +230,40 @@ class DiffusionPolicy:
         path_parts.extend([current_day, current_time])
         return os.path.join(*path_parts)
 
-    def _encode_obs_condition(self, npcs, npose):
+    def _project_language_embedding(self, language_embedding, batch_size, dtype):
+        if not self.use_language_conditioning:
+            return None
+        if language_embedding is None:
+            raise ValueError("Language conditioning is enabled but no language_embedding provided") 
+
+        language_embedding = language_embedding.to(self.device, dtype=torch.float32)
+        if language_embedding.dim() != 2:
+            raise ValueError(
+                f"language_embedding must be rank-2 [B, D], got shape {tuple(language_embedding.shape)}"
+            )
+        if language_embedding.shape[0] != batch_size:
+            raise ValueError(
+                f"language_embedding batch size mismatch: expected {batch_size}, got {language_embedding.shape[0]}"
+            )
+        if language_embedding.shape[-1] != self.language_input_dim:
+            raise ValueError(
+                f"language_embedding dim mismatch: expected {self.language_input_dim}, got {language_embedding.shape[-1]}"
+            )
+
+        return self.nets['language_proj'](language_embedding)
+
+    def _encode_obs_condition(self, npcs, npose, language_embedding=None):
         pcs_features = self.nets['vision_encoder'](npcs)
         obs_features = torch.cat([pcs_features, npose], dim=-1)
-        return obs_features.flatten(start_dim=1)
+        obs_flat = obs_features.flatten(start_dim=1)
+        lang_proj = self._project_language_embedding(
+            language_embedding=language_embedding,
+            batch_size=obs_flat.shape[0],
+            dtype=obs_flat.dtype,
+        )
+        if lang_proj is None:
+            return obs_flat
+        return torch.cat([obs_flat, lang_proj], dim=-1)
 
     def _prepare_policy_inputs(self, pcs, env_state):
         if len(pcs[0].shape) == 2:
@@ -362,7 +412,8 @@ class DiffusionPolicy:
                         '''
                         seg pointnet
                         '''
-                        obs_cond = self._encode_obs_condition(npcs, npose)
+                        language_embedding = nbatch.get('language_embedding', None)
+                        obs_cond = self._encode_obs_condition(npcs, npose, language_embedding=language_embedding)
 
                         if self.policy_mode == 'flow_matching':
                             loss = self._compute_flow_matching_loss(naction, obs_cond)
@@ -407,17 +458,17 @@ class DiffusionPolicy:
             saved_state_dict = self.nets.state_dict()
         self._save_checkpoint(pth_path, saved_state_dict)
         
-    def infer_action_with_seg(self, pcs, env_state):
+    def infer_action_with_seg(self, pcs, env_state, language_embedding=None):
         npcs, nstate = self._prepare_policy_inputs(pcs, env_state)
         with torch.no_grad():
-            obs_cond = self._encode_obs_condition(npcs, nstate)
+            obs_cond = self._encode_obs_condition(npcs, nstate, language_embedding=language_embedding)
             naction = self._sample_action_trajectory(obs_cond, nstate.shape[0])
         return naction
 
-    def infer_action(self, pcs, env_state):
+    def infer_action(self, pcs, env_state, language_embedding=None):
         npcs, nstate = self._prepare_policy_inputs(pcs, env_state)
         with torch.no_grad():
-            obs_cond = self._encode_obs_condition(npcs, nstate)
+            obs_cond = self._encode_obs_condition(npcs, nstate, language_embedding=language_embedding)
             naction = self._sample_action_trajectory(obs_cond, nstate.shape[0])
         return naction
 
@@ -447,7 +498,8 @@ class DiffusionPolicy:
             npose = nbatch['env_state'][:,:self.args.obs_horizon,:self.low_obs_dim].to(self.device)
             naction = nbatch['action'][:,:,:self.action_dim].float().to(self.device)
             B = npose.shape[0]
-            obs_cond = self._encode_obs_condition(npcs, npose)
+            language_embedding = nbatch.get('language_embedding', None)
+            obs_cond = self._encode_obs_condition(npcs, npose, language_embedding=language_embedding)
 
             if self.policy_mode == 'flow_matching':
                 primary_loss = self._compute_flow_matching_loss(naction, obs_cond).item()

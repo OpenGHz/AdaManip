@@ -1,6 +1,30 @@
 import numpy as np
 import torch
 import zarr
+import json
+from pathlib import Path
+
+
+def _load_trajectory_language_records(path):
+    text = Path(path).read_text(encoding='utf-8').strip()
+    if not text:
+        return []
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, list):
+            return parsed
+        if isinstance(parsed, dict):
+            return [parsed]
+    except json.JSONDecodeError:
+        pass
+
+    records = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        records.append(json.loads(line))
+    return records
 
 def obs_wrapper(obs, dof=0):
     pcs = obs['pc']
@@ -126,8 +150,15 @@ class ManipDataset(torch.utils.data.Dataset):
         env_state_list = []
         episode_end_list = []
 
+        if isinstance(dataset_path, (str, Path)):
+            dataset_path = [dataset_path]
+
+        dataset_paths = [Path(p) for p in dataset_path]
+
+        local_episode_counts = []
+
         init = 0
-        for data_path in dataset_path:
+        for data_path in dataset_paths:
             data = zarr.open(data_path, 'a')
             ends = data['meta']['episode_ends'][:]
             episode_end_list.append(ends + init)
@@ -135,6 +166,7 @@ class ManipDataset(torch.utils.data.Dataset):
             pcs_list.append(data['data']['pcs'])
             action_data_list.append(data['data']['action'])
             env_state_list.append(data['data']['env_state'])
+            local_episode_counts.append(len(ends))
 
         '''
         seg pointcloud don not need moveaxis
@@ -160,9 +192,66 @@ class ManipDataset(torch.utils.data.Dataset):
         print("pad after is", pred_horizon)
         self.indices = indices
         self.train_data = train_data
+        self.episode_ends = episode_ends
         self.pred_horizon = pred_horizon
         self.action_horizon = action_horizon
         self.obs_horizon = obs_horizon
+
+        self.language_enabled = False
+        self._episode_lang_index = {}
+        self._language_chain_embeddings = []
+
+        traj_paths = [p.parent / 'trajectory_language.jsonl' for p in dataset_paths]
+        emb_paths = [p.parent / 'language_embedding_dict.json' for p in dataset_paths]
+
+        has_any_language = any(tp.exists() and ep.exists() for tp, ep in zip(traj_paths, emb_paths))
+        has_all_language = all(tp.exists() and ep.exists() for tp, ep in zip(traj_paths, emb_paths))
+
+        if has_any_language and not has_all_language:
+            raise FileNotFoundError(
+                'Language files are incomplete across dataset paths. '
+                'Expected both trajectory_language.jsonl and language_embedding_dict.json for each dataset.'
+            )
+
+        if has_all_language:
+            episode_offset = 0
+            for source_idx, (traj_path, emb_path, local_episode_count) in enumerate(
+                zip(traj_paths, emb_paths, local_episode_counts)
+            ):
+                traj_records = _load_trajectory_language_records(traj_path)
+                traj_map = {int(item['episode_id']): item for item in traj_records}
+
+                with emb_path.open('r', encoding='utf-8') as f:
+                    emb_dict = json.load(f)
+                chain_embeddings = np.asarray(emb_dict['expanded_minimal_chains'], dtype=np.float32)
+                self._language_chain_embeddings.append(chain_embeddings)
+
+                for local_episode_id in range(local_episode_count):
+                    if local_episode_id not in traj_map:
+                        raise KeyError(
+                            f'Missing episode_id={local_episode_id} in {traj_path}'
+                        )
+                    chain_ids = traj_map[local_episode_id].get('command_chain_ids', None)
+                    if not chain_ids:
+                        raise ValueError(
+                            f'Empty command_chain_ids for episode_id={local_episode_id} in {traj_path}'
+                        )
+
+                    chain_ids = [int(cid) for cid in chain_ids]
+                    max_chain_id = chain_embeddings.shape[0] - 1
+                    if max(chain_ids) > max_chain_id or min(chain_ids) < 0:
+                        raise IndexError(
+                            f'command_chain_ids out of range in {traj_path}: {chain_ids}, '
+                            f'valid range [0, {max_chain_id}]'
+                        )
+
+                    global_episode_id = episode_offset + local_episode_id
+                    self._episode_lang_index[global_episode_id] = (source_idx, chain_ids)
+
+                episode_offset += local_episode_count
+
+            self.language_enabled = True
+            print('language conditioning enabled in ManipDataset')
 
     def __len__(self):
         return len(self.indices)
@@ -180,6 +269,17 @@ class ManipDataset(torch.utils.data.Dataset):
             obs_start_idx=obs_start_idx,
             obs_end_idx=obs_end_idx
         )
+
+        if self.language_enabled:
+            frame_idx = int(action_start_idx)
+            episode_id = int(np.searchsorted(self.episode_ends, frame_idx, side='right'))
+            source_idx, chain_ids = self._episode_lang_index[episode_id]
+            chain_id = int(np.random.choice(chain_ids))
+            lang_embedding = self._language_chain_embeddings[source_idx][chain_id].astype(np.float32)
+
+            nsample['language_embedding'] = lang_embedding
+            nsample['language_chain_id'] = np.int64(chain_id)
+
         return nsample
 
 def merge_dataset(path_list, to_path):

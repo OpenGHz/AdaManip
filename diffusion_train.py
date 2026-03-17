@@ -78,6 +78,9 @@ def get_args():
     parser.add_argument('--flow_beta_beta', type=float, default=1.0)
     parser.add_argument('--flow_tau_cutoff', type=float, default=0.999)
     parser.add_argument('--flow_use_ema', action='store_true', default=False)
+    parser.add_argument('--use_language_conditioning', action='store_true', default=False)
+    parser.add_argument('--language_input_dim', type=int, default=512)
+    parser.add_argument('--language_proj_dim', type=int, default=128)
     # seg pointnet para
     parser.add_argument('--input_feat', type=int, default=3)
     parser.add_argument('--feat_dim', type=int, default='128')
