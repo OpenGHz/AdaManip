@@ -2,6 +2,8 @@ import torch
 import torch.nn as nn
 import numpy as np
 import os
+import shutil
+from pathlib import Path
 from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
 from diffusers.schedulers.scheduling_ddim import DDIMScheduler
 from diffusers.optimization import get_scheduler
@@ -36,6 +38,7 @@ class argument:
         self.use_language_conditioning = False
         self.language_input_dim = 512
         self.language_proj_dim = 128
+        self.language_embedding_dict_path = None
         self.DDIM = False
         self.discrete = False
         self.dof_dim = 0
@@ -230,6 +233,30 @@ class DiffusionPolicy:
         path_parts.extend([current_day, current_time])
         return os.path.join(*path_parts)
 
+    def _copy_language_embedding_dict_to_logdir(self, log_dir):
+        if not self.use_language_conditioning:
+            return
+
+        dataset_paths = self.args.dataset_path
+        if isinstance(dataset_paths, (str, Path)):
+            dataset_paths = [dataset_paths]
+
+        candidate_sources = []
+        for dataset_path in dataset_paths:
+            dataset_dir = Path(dataset_path).parent
+            embedding_dict_path = dataset_dir / 'language_embedding_dict.json'
+            if embedding_dict_path.exists():
+                candidate_sources.append(embedding_dict_path)
+
+        if not candidate_sources:
+            print('warning: language conditioning enabled but no language_embedding_dict.json found near dataset path')
+            return
+
+        os.makedirs(log_dir, exist_ok=True)
+        target_path = Path(log_dir) / 'language_embedding_dict.json'
+        shutil.copy2(candidate_sources[0], target_path)
+        print(f'copied language embedding dict to {target_path}')
+
     def _project_language_embedding(self, language_embedding, batch_size, dtype):
         if not self.use_language_conditioning:
             return None
@@ -384,6 +411,7 @@ class DiffusionPolicy:
             num_training_steps=len(dataloader) * self.args.num_epochs
         )
         log_dir = self._get_run_log_dir()
+        self._copy_language_embedding_dict_to_logdir(log_dir)
         if SummaryWriter is None:
             raise ImportError("tensorboard is required for training but is not installed")
         writer = SummaryWriter(log_dir=log_dir)

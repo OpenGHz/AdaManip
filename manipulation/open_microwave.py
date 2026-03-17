@@ -10,6 +10,8 @@ import collections
 import av
 import shutil
 import time
+import json
+from pathlib import Path
 
 
 class Mp4VideoWriter:
@@ -227,6 +229,46 @@ class OpenMicroWaveManipulation(BaseManipulation) :
         )
         self.video_recorder.write_frames(rgb_frames)
 
+    def _load_eval_language_embedding_bank(self, diffusion):
+        if not getattr(diffusion.args, 'use_language_conditioning', False):
+            return None
+
+        language_path = getattr(diffusion.args, 'language_embedding_dict_path', None)
+        if language_path is None:
+            ckpt_dir = Path(diffusion.args.ckpt_path).resolve().parent
+            language_path = ckpt_dir / 'language_embedding_dict.json'
+        else:
+            language_path = Path(language_path)
+
+        if not language_path.exists():
+            raise FileNotFoundError(
+                f'language_embedding_dict.json not found: {language_path}'
+            )
+
+        with language_path.open('r', encoding='utf-8') as f:
+            payload = json.load(f)
+
+        bank = np.asarray(payload['expanded_minimal_chains'], dtype=np.float32)
+        if bank.ndim != 2:
+            raise ValueError(f'expanded_minimal_chains must be 2D, got shape {bank.shape}')
+
+        expected_dim = int(getattr(diffusion.args, 'language_input_dim', bank.shape[-1]))
+        if bank.shape[-1] != expected_dim:
+            raise ValueError(
+                f'language embedding dim mismatch: expected {expected_dim}, got {bank.shape[-1]}'
+            )
+
+        print(f'loaded language embedding bank: {language_path}, size={bank.shape[0]}')
+        return torch.from_numpy(bank).to(diffusion.device)
+
+    def _sample_episode_language_embedding(self, embedding_bank, batch_size):
+        if embedding_bank is None:
+            return None, None
+        bank_size = embedding_bank.shape[0]
+        sampled_idx = int(np.random.randint(0, bank_size))
+        sampled = embedding_bank[sampled_idx].unsqueeze(0).repeat(batch_size, 1)
+        return sampled, sampled_idx
+
     '''
     test env
     '''
@@ -325,12 +367,18 @@ class OpenMicroWaveManipulation(BaseManipulation) :
         eps_num = self.cfg["task"]["num_episode"]
         succ_cnt = 0
         succ_rate = []
+        language_embedding_bank = self._load_eval_language_embedding_bank(diffusion)
         eval_save_dir = self._build_eval_save_dir()
         self._init_video_recorder(eval_save_dir)
         for eps in range(eps_num):
             print("eps_{}".format(eps+1))
             done_flag = [False] * self.env.num_envs
             episode_results = None
+            episode_language_embedding, sampled_language_idx = self._sample_episode_language_embedding(
+                language_embedding_bank, self.env.num_envs
+            )
+            if sampled_language_idx is not None:
+                print(f'episode {eps + 1} language embedding id: {sampled_language_idx}')
             self.env.reset(clock_same=False)
             self.env.gripper = torch.zeros((self.env.num_envs,1),device=self.env.device)
             if self.video_recorder is not None:
@@ -345,7 +393,11 @@ class OpenMicroWaveManipulation(BaseManipulation) :
             try:
                 step = 0
                 while step <= 32:
-                    action = diffusion.infer_action_with_seg(pcs_deque, env_state_deque).detach()
+                    action = diffusion.infer_action_with_seg(
+                        pcs_deque,
+                        env_state_deque,
+                        language_embedding=episode_language_embedding,
+                    ).detach()
                     action = action[:, :diffusion.args.action_horizon, :]
                     step += diffusion.args.action_horizon
                     for act in range(action.shape[1]):

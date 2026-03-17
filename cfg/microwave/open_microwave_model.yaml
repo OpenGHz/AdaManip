@@ -1,12 +1,12 @@
 task:
   task_name: "open_microwave"
   policy: "adaptive"
-  num_episode: 10
+  num_episode: 1
   grasp: False
 
 model:
-  # policy_mode: diffusion
-  policy_mode: flow_matching
+  policy_mode: diffusion
+  # policy_mode: flow_matching
   obs_horizon: 2
   action_horizon: 1
   pred_horizon: 4
@@ -27,8 +27,11 @@ model:
   # model_path: logs/Mar09/19-17-36/ema_nets.pth
   # diffusion_model_path: logs/Mar10/10-53-38/ema_nets.pth
   # diffusion_model_path: logs/Mar09/19-17-36/ema_nets.pth
-  # diffusion_model_path: logs/microwave/manip/Mar14/08-38-56/ema_nets.pth  # diffusion
-  diffusion_model_path: logs/microwave/manip/Mar14/08-39-36/ema_nets.pth  # flow matching
+  diffusion_model_path: logs/microwave/manip/Mar17/11-21-07/ema_nets.pth
+  use_language_conditioning: True
+  language_input_dim: 512
+  language_proj_dim: 128
+  # language_embedding_dict_path: logs/microwave/manip/Mar17/11-21-07/language_embedding_dict.json
 
 env:
   env_name: "open microwave"
@@ -51,7 +54,7 @@ env:
   start_index: 80
   collectDataPath: "microwave/0" # ../logs/_seed{}/***
   collectPC: False
-  collectRGBVideo: True
+  collectRGBVideo: False
   collectForce: True
   visualizePointcloud: False
   PointDownSampleNum: 2048

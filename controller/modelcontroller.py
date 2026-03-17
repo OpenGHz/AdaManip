@@ -23,6 +23,10 @@ class ModelController(BaseController) :
         self.args.flow_beta_alpha = self.cfg_model.get("flow_beta_alpha", self.args.flow_beta_alpha)
         self.args.flow_beta_beta = self.cfg_model.get("flow_beta_beta", self.args.flow_beta_beta)
         self.args.flow_tau_cutoff = self.cfg_model.get("flow_tau_cutoff", self.args.flow_tau_cutoff)
+        self.args.use_language_conditioning = self.cfg_model.get("use_language_conditioning", self.args.use_language_conditioning)
+        self.args.language_input_dim = self.cfg_model.get("language_input_dim", self.args.language_input_dim)
+        self.args.language_proj_dim = self.cfg_model.get("language_proj_dim", self.args.language_proj_dim)
+        self.args.language_embedding_dict_path = self.cfg_model.get("language_embedding_dict_path", self.args.language_embedding_dict_path)
         self.args.discrete = self.cfg_model["discrete"]
         self.args.input_feat = self.cfg_model["input_feat"]
         self.args.feat_dim = self.cfg_model["feat_dim"]
