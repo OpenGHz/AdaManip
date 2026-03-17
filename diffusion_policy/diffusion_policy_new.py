@@ -242,20 +242,28 @@ class DiffusionPolicy:
             dataset_paths = [dataset_paths]
 
         candidate_sources = []
+        language_expanded_sources = []
         for dataset_path in dataset_paths:
             dataset_dir = Path(dataset_path).parent
             embedding_dict_path = dataset_dir / 'language_embedding_dict.json'
+            language_expanded_path = dataset_dir / 'language_expanded.json'
             if embedding_dict_path.exists():
                 candidate_sources.append(embedding_dict_path)
+            if language_expanded_path.exists():
+                language_expanded_sources.append(language_expanded_path)
 
         if not candidate_sources:
-            print('warning: language conditioning enabled but no language_embedding_dict.json found near dataset path')
-            return
+            raise ValueError('warning: language conditioning enabled but no language_embedding_dict.json found near dataset path')
+        if not language_expanded_sources:
+            raise ValueError('warning: language conditioning enabled but no language_expanded.json found near dataset path')
 
         os.makedirs(log_dir, exist_ok=True)
         target_path = Path(log_dir) / 'language_embedding_dict.json'
         shutil.copy2(candidate_sources[0], target_path)
         print(f'copied language embedding dict to {target_path}')
+        target_path = Path(log_dir) / 'language_expanded.json'
+        shutil.copy2(language_expanded_sources[0], target_path)
+        print(f'copied language expanded dict to {target_path}')
 
     def _project_language_embedding(self, language_embedding, batch_size, dtype):
         if not self.use_language_conditioning:
