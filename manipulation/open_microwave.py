@@ -53,7 +53,7 @@ class EpisodeVideoRecorder:
             "preset": video_cfg.get("preset", "fast"),
         }
         configured_camera_ids = video_cfg.get("cameraIds", [])
-        if self.camera_type == "fixed":
+        if self.camera_type in ("fixed", "video"):
             self.camera_ids = list(configured_camera_ids) if configured_camera_ids else list(range(num_fixed_cameras))
         else:
             self.camera_ids = [0]
@@ -211,13 +211,22 @@ class OpenMicroWaveManipulation(BaseManipulation) :
         if not self.cfg['env'].get('collectRGBVideo', False):
             self.video_recorder = None
             return
+        video_cam_cfg = self.cfg["env"].get("videoCam")
+        if video_cam_cfg is not None and self.cfg["env"].get("rgbVideo", {}).get("cameraType") == "video":
+            vid_width = video_cam_cfg["width"]
+            vid_height = video_cam_cfg["height"]
+            num_video_cams = len(video_cam_cfg["cam_start"])
+        else:
+            vid_width = self.cfg["env"]["cam"]["width"]
+            vid_height = self.cfg["env"]["cam"]["height"]
+            num_video_cams = getattr(self.env, "num_cam", 1)
         self.video_recorder = EpisodeVideoRecorder(
             save_dir=save_dir,
             cfg=self.cfg,
             num_envs=self.env.num_envs,
-            width=self.cfg["env"]["cam"]["width"],
-            height=self.cfg["env"]["cam"]["height"],
-            num_fixed_cameras=getattr(self.env, "num_cam", 1),
+            width=vid_width,
+            height=vid_height,
+            num_fixed_cameras=num_video_cams,
         )
 
     def _record_video_frame(self):
@@ -698,6 +707,8 @@ class OpenMicroWaveManipulation(BaseManipulation) :
                             expanded_minimal_chains=expanded_minimal_chains,
                         )
                         traj_record["episode_id"] = saved_episode_id
+                        traj_record["round_idx"] = eps
+                        traj_record["env_id"] = env_id
                         frame_start = len(frame_records)
                         env_frames = self._episode_frame_records[env_id]
                         frame_records.extend(env_frames)

@@ -27,7 +27,8 @@ model:
   # model_path: logs/Mar09/19-17-36/ema_nets.pth
   # diffusion_model_path: logs/Mar10/10-53-38/ema_nets.pth
   # diffusion_model_path: logs/Mar09/19-17-36/ema_nets.pth
-  diffusion_model_path: logs/microwave/manip/Mar17/11-21-07/ema_nets.pth
+  # diffusion_model_path: logs/microwave/manip/Mar17/11-21-07/ema_nets.pth
+  diffusion_model_path: logs/microwave/manip/Mar17/13-38-17/ema_nets.pth
   use_language_conditioning: True
   language_input_dim: 512
   language_proj_dim: 128

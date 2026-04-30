@@ -97,6 +97,7 @@ class OpenMicroWave(BaseEnv):
         self.collectData = self.cfg["env"]["collectData"]
         self.fixed_camera_handle_list = [[] for i in range(self.env_num)]
         self.hand_camera_handle_list = []
+        self.video_camera_handle_list = [[] for i in range(self.env_num)]
         self.fixed_camera_vinv_list = [[] for i in range(self.env_num)]
         self.fixed_camera_proj_list = [[] for i in range(self.env_num)]
         self.fixed_env_origin_list = []
@@ -794,37 +795,52 @@ class OpenMicroWave(BaseEnv):
         if not self.cfg["env"]["enableCameraSensors"]:
             raise RuntimeError("RGB capture requires enableCameraSensors=True")
 
-        if camera_type == "fixed":
+        if camera_type == "video":
+            video_cam_cfg = self.cfg["env"].get("videoCam")
+            if video_cam_cfg is None:
+                raise ValueError("camera_type='video' requires videoCam config")
+            num_video_cams = len(video_cam_cfg["cam_start"])
+            selected_camera_ids = list(range(num_video_cams)) if not camera_ids else list(camera_ids)
+            width, height = video_cam_cfg["width"], video_cam_cfg["height"]
+            handle_list = self.video_camera_handle_list
+        elif camera_type == "fixed":
             selected_camera_ids = list(range(self.num_cam)) if camera_ids is None else list(camera_ids)
+            width = self.cfg["env"]["cam"]["width"]
+            height = self.cfg["env"]["cam"]["height"]
+            handle_list = self.fixed_camera_handle_list
         elif camera_type == "hand":
             selected_camera_ids = [0]
+            width = self.cfg["env"]["cam"]["width"]
+            height = self.cfg["env"]["cam"]["height"]
         else:
             raise ValueError(f"Unsupported camera_type: {camera_type}")
 
         frames = [[] for _ in range(self.num_envs)]
         self.gym.start_access_image_tensors(self.sim)
         try:
-            if camera_type == "fixed":
+            if camera_type in ("fixed", "video"):
                 for env_id in range(self.num_envs):
                     env_ptr = self.env_ptr_list[env_id]
                     for cam_id in selected_camera_ids:
-                        camera_handle = self.fixed_camera_handle_list[env_id][cam_id]
+                        camera_handle = handle_list[env_id][cam_id]
                         color_image = self.gym.get_camera_image(self.sim, env_ptr, camera_handle, gymapi.IMAGE_COLOR)
-                        frames[env_id].append(self._reshape_rgb_image(color_image))
+                        frames[env_id].append(self._reshape_rgb_image(color_image, width, height))
             else:
                 for env_id in range(self.num_envs):
                     env_ptr = self.env_ptr_list[env_id]
                     camera_handle = self.hand_camera_handle_list[env_id]
                     color_image = self.gym.get_camera_image(self.sim, env_ptr, camera_handle, gymapi.IMAGE_COLOR)
-                    frames[env_id].append(self._reshape_rgb_image(color_image))
+                    frames[env_id].append(self._reshape_rgb_image(color_image, width, height))
         finally:
             self.gym.end_access_image_tensors(self.sim)
 
         return frames
 
-    def _reshape_rgb_image(self, color_image):
-        width = self.cfg["env"]["cam"]["width"]
-        height = self.cfg["env"]["cam"]["height"]
+    def _reshape_rgb_image(self, color_image, width=None, height=None):
+        if width is None:
+            width = self.cfg["env"]["cam"]["width"]
+        if height is None:
+            height = self.cfg["env"]["cam"]["height"]
         frame = np.asarray(color_image, dtype=np.uint8).reshape(height, width, 4)[:, :, :3]
         return np.ascontiguousarray(frame)
     
@@ -972,6 +988,23 @@ class OpenMicroWave(BaseEnv):
             fixed_cam_proj = torch.tensor(self.gym.get_camera_proj_matrix(self.sim, env_ptr, fixed_camera_handle), device=self.device)
             self.fixed_camera_vinv_list[env_id].append(fixed_cam_vinv)
             self.fixed_camera_proj_list[env_id].append(fixed_cam_proj)
+
+        # dedicated video cameras (higher resolution, separate from observation cameras)
+        video_cam_cfg = self.cfg["env"].get("videoCam")
+        if video_cam_cfg is not None:
+            video_props = gymapi.CameraProperties()
+            video_props.width = video_cam_cfg["width"]
+            video_props.height = video_cam_cfg["height"]
+            video_props.far_plane = video_cam_cfg["cam_far_plane"]
+            video_props.near_plane = video_cam_cfg["cam_near_plane"]
+            video_props.horizontal_fov = video_cam_cfg["cam_horizontal_fov"]
+            video_props.enable_tensors = True
+            for i in range(len(video_cam_cfg["cam_start"])):
+                vcam_handle = self.gym.create_camera_sensor(env_ptr, video_props)
+                v_start = gymapi.Vec3(*video_cam_cfg["cam_start"][i])
+                v_target = gymapi.Vec3(*video_cam_cfg["cam_target"][i])
+                self.gym.set_camera_location(vcam_handle, env_ptr, v_start, v_target)
+                self.video_camera_handle_list[env_id].append(vcam_handle)
 
         # hand camera
         hand_camera_handle = self.gym.create_camera_sensor(env_ptr, camera_props)

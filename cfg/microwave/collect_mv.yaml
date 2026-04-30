@@ -30,12 +30,25 @@ env:
   visualizePointcloud: False
   PointDownSampleNum: 2048
   rgbVideo:
-    cameraType: fixed
-    cameraIds: []
+    cameraType: video
+    cameraIds: [1]
     fps: 10
     codec: libx264
     crf: 18
     preset: fast
+
+  videoCam:
+    width: 640
+    height: 480
+    cam_far_plane: 100
+    cam_near_plane: 0.01
+    cam_horizontal_fov: 111  # wider than obs cam (85°) to keep vertical fov=85° for 640x480 (4:3)
+    cam_start:
+      - [0.15, -0.5, 0.8]
+      - [0.15, 0.5, 0.8]
+    cam_target:
+      - [0, 0, 0.7]
+      - [0, 0, 0.7]
 
   reset:
     bottle:
