@@ -174,7 +174,34 @@ model:
 
 当前 microwave 配置中 `dof_dim=0`，所以 `obs_wrapper()` 不拼接任务机构 dof，只使用 proprioception 和上一动作。
 
-### 4.2 闭环推理
+### 4.2 多 episode 时的环境状态
+
+每个 episode 都会重新 reset 环境，当前评估代码调用的是：
+
+```python
+self.env.reset(clock_same=False)
+```
+
+因此同一个 env 槽位在不同 episode 中不会沿用上一轮的门状态。reset 会恢复机器人、微波炉 DOF、gripper、上一动作等动态状态，并重新采样每个环境的 `clock_wise`：
+
+```python
+self.clock_wise = torch.tensor(
+    np.random.rand(self.env_num) < self.cfg["env"]["clockwise"]
+)
+```
+
+含义：
+
+1. `clock_wise=1`：该 env 的微波炉门初始锁住，直接拉门无效，需要先按按钮解锁。
+2. `clock_wise=0`：该 env 的微波炉门可直接拉开。
+3. `clock_same=False`：每个 env 独立采样；同一个 env 在下一个 episode 会重新采样，可能与上一轮不同。
+4. 默认 `env.clockwise=0.5` 时，每个 env 每个 episode 都有 50% 概率锁住、50% 概率不锁。
+
+例如 env 1 在第 1 个 episode 中可能是 `clock_wise=1`，必须先按按钮；到第 2 个 episode，env 1 会重新按 `env.clockwise` 采样，可能仍然锁住，也可能变成可直接拉开。
+
+注意：这里重新采样的是机构锁定状态和动态状态；已加载的 asset/env 槽位通常不会在 episode 之间重新换成另一台微波炉。
+
+### 4.3 闭环推理
 
 主循环条件为 `step <= 32`。每次循环：
 
@@ -202,7 +229,7 @@ action = action[:, :diffusion.args.action_horizon, :]
 
 当前配置 `action_horizon=1`，所以每次模型预测 4 步，但环境只执行第 1 步，然后重新采集观测再推理。
 
-### 4.3 单步动作执行
+### 4.4 单步动作执行
 
 每个被执行的动作包含：
 
