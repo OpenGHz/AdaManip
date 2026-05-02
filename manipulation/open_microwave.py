@@ -454,6 +454,166 @@ class OpenMicroWaveManipulation(BaseManipulation) :
         except OSError as exc:
             print(f"[adaptive] video recategorization for episode {eps_idx} failed: {exc}")
 
+    def _microwave_canonical_chain_for_clock_wise(self, clock_wise):
+        """Return the canonical minimal_chain for the given clock_wise scalar.
+
+        Mirrors AdaptiveLanguageAsker._gt_chain_for_clock_wise so dataset
+        consumers (eval_video2prompt.py, Video2PromptGroundTruth) and the
+        live asker agree on the truth chain.
+        """
+        return ["按按钮", "拉门"] if int(round(float(clock_wise))) == 1 else ["拉门"]
+
+    def _adaptive_init_inference_dump(self, save_dir, task_spec, expanded_minimal_chains):
+        """Initialize on-disk dump compatible with scripts/eval_video2prompt.py.
+
+        Layout produced at run end (so an offline asker re-run only needs:
+            scripts/eval_video2prompt.py --data_root <save_dir parent>
+                                         --data_dir <save_dir base>
+                                         --platform <pick> ...).
+
+            <save_dir>/
+                language_expanded.json
+                trajectory_language.jsonl
+                demo_data.zip          (zarr; meta/episode_ends + data/action)
+                rgb_videos/episode_<eps>/env_<id>_cam_<cam>.mp4
+        """
+        os.makedirs(save_dir, exist_ok=True)
+        language_expanded = {
+            "schema_version": "v1",
+            "generated_from": "manipulation/open_microwave.py::diffusion_evaluate "
+            "(task.save_inference_data)",
+            "task": "microwave",
+            "command": task_spec["command"],
+            "operation_set": task_spec.get("operation_set", []),
+            "expanded_minimal_chains": [list(chain) for chain in expanded_minimal_chains],
+        }
+        for key in ("additional_prompt", "success_check_additional_prompt"):
+            if key in task_spec:
+                language_expanded[key] = task_spec[key]
+        with open(os.path.join(save_dir, "language_expanded.json"), "w", encoding="utf-8") as f:
+            json.dump(language_expanded, f, ensure_ascii=False, indent=2)
+        return {
+            "language_expanded": language_expanded,
+            "records": [],          # one entry per (eps, env) tuple
+            "action_arrays": [],    # parallel to records
+        }
+
+    def _adaptive_record_inference_episode(
+        self,
+        dump_state,
+        eps_idx,
+        env_id,
+        clock_wise,
+        chain_id_used,
+        done_flag,
+        adaptive_state,
+        action_array,
+        adaptive_asker_record,
+        expanded_minimal_chains,
+    ):
+        if dump_state is None or action_array is None or len(action_array) == 0:
+            return
+        canonical_minimal_chain = self._microwave_canonical_chain_for_clock_wise(clock_wise)
+        try:
+            canonical_minimal_chain_id = expanded_minimal_chains.index(canonical_minimal_chain)
+        except ValueError:
+            canonical_minimal_chain_id = None
+        chain_used_steps = (
+            list(expanded_minimal_chains[chain_id_used])
+            if chain_id_used is not None
+            and 0 <= chain_id_used < len(expanded_minimal_chains)
+            else []
+        )
+
+        # Append the per-env action array to the rolling buffer, then update
+        # frame_range so consumers can slice the zarr correctly.
+        prev_total = sum(arr.shape[0] for arr in dump_state["action_arrays"])
+        dump_state["action_arrays"].append(np.asarray(action_array, dtype=np.float32))
+        new_total = prev_total + dump_state["action_arrays"][-1].shape[0]
+
+        record = {
+            "minimal_chain_id": int(canonical_minimal_chain_id) if canonical_minimal_chain_id is not None else None,
+            "minimal_chain": canonical_minimal_chain,
+            # `attempt_chain` is what the policy was conditioned on this episode.
+            # It groups eval_video2prompt.py's per-chain stats by language conditioning.
+            "attempt_chain": chain_used_steps if chain_used_steps else canonical_minimal_chain,
+            "stage_status": [True] * len(chain_used_steps) if chain_used_steps else [True],
+            "command_chains": [chain_used_steps] if chain_used_steps else [canonical_minimal_chain],
+            "command_chain_ids": [int(chain_id_used)] if chain_id_used is not None else [],
+            "success": bool(done_flag),
+            "episode_id": int(len(dump_state["records"])),
+            "round_idx": int(eps_idx),
+            "env_id": int(env_id),
+            "frame_range": [int(prev_total), int(new_total)],
+            # Inference-only metadata; eval_video2prompt.py ignores unknown fields.
+            "clock_wise": float(clock_wise),
+            "language_chain_id_used": int(chain_id_used) if chain_id_used is not None else None,
+            "frozen_clock_wise": (
+                float(adaptive_state.frozen_clock_wise)
+                if adaptive_state is not None and adaptive_state.frozen_clock_wise is not None
+                else None
+            ),
+            "tried_chain_ids": (
+                sorted(int(item) for item in adaptive_state.tried_chain_ids)
+                if adaptive_state is not None
+                else []
+            ),
+            "locked_chain_id": (
+                int(adaptive_state.locked_chain_id)
+                if adaptive_state is not None and adaptive_state.locked_chain_id is not None
+                else None
+            ),
+            "adaptive_asker": adaptive_asker_record,
+        }
+        dump_state["records"].append(record)
+
+    def _adaptive_finalize_inference_dump(self, save_dir, dump_state):
+        """Write trajectory_language.jsonl + demo_data.zip at run end."""
+        if dump_state is None:
+            return
+        records = dump_state.get("records", [])
+        action_arrays = dump_state.get("action_arrays", [])
+        if not records:
+            return
+
+        traj_path = os.path.join(save_dir, "trajectory_language.jsonl")
+        with open(traj_path, "w", encoding="utf-8") as f:
+            json.dump(records, f, ensure_ascii=False, indent=2)
+        print(f"[adaptive] wrote {traj_path} ({len(records)} entries)")
+
+        try:
+            import zarr
+        except ImportError as exc:
+            print(f"[adaptive] zarr not available; skipping demo_data.zip: {exc}")
+            return
+        all_actions = (
+            np.concatenate(action_arrays, axis=0).astype(np.float32)
+            if action_arrays
+            else np.zeros((0, 10), dtype=np.float32)
+        )
+        episode_ends = np.cumsum([arr.shape[0] for arr in action_arrays], dtype=np.int64)
+        zip_path = os.path.join(save_dir, "demo_data.zip")
+        if os.path.exists(zip_path):
+            os.remove(zip_path)
+        store = zarr.ZipStore(zip_path, mode="w")
+        try:
+            root = zarr.group(store=store, overwrite=True)
+            data = root.create_group("data")
+            data.create_dataset(
+                "action",
+                data=all_actions,
+                chunks=(min(1024, max(1, all_actions.shape[0])), all_actions.shape[1]) if all_actions.size else (1, 10),
+                dtype="float32",
+            )
+            meta = root.create_group("meta")
+            meta.create_dataset("episode_ends", data=episode_ends, dtype="int64")
+        finally:
+            store.close()
+        print(
+            f"[adaptive] wrote {zip_path} (action shape={all_actions.shape}, "
+            f"num_episodes={len(episode_ends)})"
+        )
+
     '''
     test env
     '''
@@ -587,7 +747,26 @@ class OpenMicroWaveManipulation(BaseManipulation) :
         adaptive_asker = None
         adaptive_camera_id = 0
         adaptive_rng = None
+        adaptive_expanded_chains = None
+        adaptive_dump_state = None
+        # save_inference_data is independent of adaptive_language.enable: a pure
+        # data-collection rollout (closed-loop Stage 2) wants the dump and skips
+        # the asker.
+        adaptive_save_inference_data = bool(
+            self.cfg.get("task", {}).get("save_inference_data", False)
+        )
         max_retry_rounds = int(adaptive_cfg.get("max_retry_rounds", 3))
+        if adaptive_enable or adaptive_save_inference_data:
+            template_path, task_spec = self.load_task_language_template("microwave")
+            expanded_minimal_chains = self.build_expanded_minimal_chains(task_spec["minimal_chains"])
+            adaptive_expanded_chains = expanded_minimal_chains
+            if adaptive_enable:
+                num_chains = int(language_embedding_bank.shape[0])
+                if len(expanded_minimal_chains) != num_chains:
+                    raise RuntimeError(
+                        f"adaptive_language: expanded_minimal_chains length {len(expanded_minimal_chains)} "
+                        f"!= embedding bank size {num_chains}; checkpoint and language_template are inconsistent."
+                    )
         if adaptive_enable:
             from manipulation.adaptive_language_asker import (
                 AdaptiveLanguageAsker,
@@ -595,19 +774,11 @@ class OpenMicroWaveManipulation(BaseManipulation) :
                 AdaptiveLanguageState,
             )
             asker_cfg = AdaptiveLanguageAskerConfig(adaptive_cfg.get("asker", {}))
-            template_path, task_spec = self.load_task_language_template("microwave")
-            expanded_minimal_chains = self.build_expanded_minimal_chains(task_spec["minimal_chains"])
-            num_chains = int(language_embedding_bank.shape[0])
-            if len(expanded_minimal_chains) != num_chains:
-                raise RuntimeError(
-                    f"adaptive_language: expanded_minimal_chains length {len(expanded_minimal_chains)} "
-                    f"!= embedding bank size {num_chains}; checkpoint and language_template are inconsistent."
-                )
             adaptive_asker = AdaptiveLanguageAsker(
                 asker_cfg, task_spec, expanded_minimal_chains
             )
             adaptive_states = [
-                AdaptiveLanguageState(num_chains=num_chains)
+                AdaptiveLanguageState(num_chains=int(language_embedding_bank.shape[0]))
                 for _ in range(self.env.num_envs)
             ]
             adaptive_camera_id = self._adaptive_resolve_camera_id(asker_cfg)
@@ -615,7 +786,21 @@ class OpenMicroWaveManipulation(BaseManipulation) :
             adaptive_rng = random.Random(seed)
             print(
                 f"[adaptive] enabled: platform={asker_cfg.platform}, model={asker_cfg.model}, "
-                f"num_chains={num_chains}, num_envs={self.env.num_envs}, camera_id={adaptive_camera_id}"
+                f"num_chains={int(language_embedding_bank.shape[0])}, "
+                f"num_envs={self.env.num_envs}, camera_id={adaptive_camera_id}"
+            )
+        if adaptive_save_inference_data:
+            if not self.cfg.get("env", {}).get("collectRGBVideo", False):
+                print(
+                    "[dump] save_inference_data=true requires env.collectRGBVideo=true; "
+                    "videos will be missing from the dump."
+                )
+            adaptive_dump_state = self._adaptive_init_inference_dump(
+                eval_save_dir, task_spec, expanded_minimal_chains
+            )
+            print(
+                f"[dump] save_inference_data: writing eval_video2prompt-compatible artifacts under {eval_save_dir} "
+                f"(adaptive_language={'on' if adaptive_enable else 'off'})"
             )
 
         for eps in range(eps_num):
@@ -684,7 +869,9 @@ class OpenMicroWaveManipulation(BaseManipulation) :
             env_state_deque = collections.deque([env_state] * diffusion.args.obs_horizon, maxlen=diffusion.args.obs_horizon)
 
             episode_action_logs = (
-                [[] for _ in range(self.env.num_envs)] if adaptive_enable else None
+                [[] for _ in range(self.env.num_envs)]
+                if (adaptive_enable or adaptive_save_inference_data)
+                else None
             )
 
             try:
@@ -706,7 +893,7 @@ class OpenMicroWaveManipulation(BaseManipulation) :
 
                         self._record_video_frame()
                         self.env.actions = action[:, act, :]
-                        if adaptive_enable:
+                        if episode_action_logs is not None:
                             action_step = action[:, act, :].detach().cpu().numpy()
                             for env_id in range(self.env.num_envs):
                                 episode_action_logs[env_id].append(action_step[env_id])
@@ -728,9 +915,11 @@ class OpenMicroWaveManipulation(BaseManipulation) :
                 if self.video_recorder is not None:
                     if episode_results is None:
                         self.video_recorder.discard_episode()
-                    elif adaptive_enable:
-                        # Flatten videos to rgb_videos/episode_<eps>/env_<id>_cam_<cam>.mp4 so the asker
-                        # can read them. Recategorization happens after the asker call below.
+                    elif adaptive_enable or adaptive_save_inference_data:
+                        # Flatten to rgb_videos/episode_<eps>/env_<id>_cam_<cam>.mp4. The
+                        # online asker (adaptive_enable) needs this layout to read the
+                        # video by env_id; offline replay through eval_video2prompt.py
+                        # (save_inference_data) likewise expects it via locate_video().
                         self.video_recorder.finish_episode(env_results=None)
                     else:
                         self.video_recorder.finish_episode(episode_results)
@@ -796,14 +985,61 @@ class OpenMicroWaveManipulation(BaseManipulation) :
                         "skipped": False,
                         "asker_success": bool(asker_success),
                         "asker_chain_id": int(asker_chain_id) if asker_chain_id is not None else None,
+                        "ground_truth_chain_id": int(ground_truth_chain_id),
                         "current_chain_id": int(s.current_chain_id) if s.current_chain_id is not None else None,
                         "locked_chain_id": int(s.locked_chain_id) if s.locked_chain_id is not None else None,
                         "tried_chain_ids": sorted(int(item) for item in s.tried_chain_ids),
                         "sweep_count": int(s.sweep_count),
                         "video_path": video_path if os.path.exists(video_path) else None,
                     }
-                if bool(adaptive_cfg.get("asker", {}).get("recategorize_videos", True)):
+                # When dumping inference data for offline replay through
+                # scripts/eval_video2prompt.py, keep the flat
+                # rgb_videos/episode_<eps>/ layout that locate_video expects.
+                if (
+                    not adaptive_save_inference_data
+                    and bool(adaptive_cfg.get("asker", {}).get("recategorize_videos", True))
+                ):
                     self._adaptive_recategorize_videos(eval_save_dir, eps, recategorize)
+
+            # Dump per-(eps, env) record. This runs whenever save_inference_data is on,
+            # regardless of whether the online asker (adaptive_language) was running.
+            if (
+                adaptive_save_inference_data
+                and adaptive_dump_state is not None
+                and episode_results is not None
+            ):
+                for env_id in range(self.env.num_envs):
+                    actions_arr = (
+                        np.stack(episode_action_logs[env_id])
+                        if episode_action_logs and episode_action_logs[env_id]
+                        else None
+                    )
+                    if chain_ids is not None:
+                        chain_id_used = chain_ids[env_id]
+                    elif sampled_language_idx is not None:
+                        chain_id_used = sampled_language_idx
+                    else:
+                        chain_id_used = None
+                    adaptive_state = (
+                        adaptive_states[env_id] if adaptive_states is not None else None
+                    )
+                    asker_record = (
+                        adaptive_asker_records[env_id]
+                        if adaptive_asker_records is not None
+                        else None
+                    )
+                    self._adaptive_record_inference_episode(
+                        adaptive_dump_state,
+                        eps_idx=eps,
+                        env_id=env_id,
+                        clock_wise=episode_clock_wise[env_id],
+                        chain_id_used=chain_id_used,
+                        done_flag=bool(done_flag[env_id]),
+                        adaptive_state=adaptive_state,
+                        action_array=actions_arr,
+                        adaptive_asker_record=asker_record,
+                        expanded_minimal_chains=adaptive_expanded_chains,
+                    )
 
             episode_elapsed_sec = float(time.perf_counter() - episode_timer_start)
             final_open_dof = [
@@ -880,6 +1116,8 @@ class OpenMicroWaveManipulation(BaseManipulation) :
         )
         self._write_eval_metrics(eval_save_dir, eval_metrics)
         print(f"Saved eval metrics: {(Path(eval_save_dir) / 'eval_metrics.json').absolute()}")
+        if adaptive_save_inference_data and adaptive_dump_state is not None:
+            self._adaptive_finalize_inference_dump(eval_save_dir, adaptive_dump_state)
         self.video_recorder = None
         return
 

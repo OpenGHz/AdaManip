@@ -699,7 +699,58 @@ asker 的 success/failure 判定迁移到 `rgb_videos/{success|failure}/episode_
 `succ_rate` 仍然基于 env 自身的 `|env.one_dof_tensor[env_id, 0]| > pi/7` 阈值统计，
 不受 asker 判定影响——这样可以独立观察「policy 真正打开门的成功率」与「asker 关于轨迹的判读」是否一致。
 
-### 8.6 冒烟测试
+### 8.6 离线复跑：把推理产物喂回 `scripts/eval_video2prompt.py`
+
+asker 在线给出的 chain id 不一定总是对的。如果想离线调 prompt、换模型或换分辨率重新评估，
+可以把 `task.save_inference_data` 设为 `true`，让推理过程把每个 (episode, env)
+的视频 + 实时 10 维 action + 任务标签按 `scripts/eval_video2prompt.py` 期望的格式写到
+`eval_save_dir`：
+
+```text
+eval_data/<run_dir>/
+  language_expanded.json        # 由 task_spec 派生：command / operation_set / expanded_minimal_chains / additional_prompt …
+  trajectory_language.jsonl     # JSON 数组，每条记录对应一对 (round_idx=eps, env_id)
+                                #   - attempt_chain  = 该 env 当次条件化所用 chain（按语言条件分组）
+                                #   - minimal_chain  = 由 frozen_clock_wise 派生的标准答案
+                                #   - success        = env 自身 DOF 阈值判定
+                                #   - frame_range    = 该轨迹在 demo_data.zip data/action 中的 [start, end)
+                                #   - 额外字段 clock_wise / language_chain_id_used /
+                                #     frozen_clock_wise / locked_chain_id / tried_chain_ids /
+                                #     adaptive_asker（asker_success, asker_chain_id, ground_truth_chain_id, …）
+                                #     （eval_video2prompt.py 会忽略不认识的字段，不影响兼容性）
+  demo_data.zip                 # zarr：data/action (N,10) float32 + meta/episode_ends (N,) int64
+  rgb_videos/
+    episode_<eps>/env_<id>_cam_<cam>.mp4
+  eval_metrics.json
+```
+
+启用 `save_inference_data=true` 时会强制使用扁平的 `rgb_videos/episode_<eps>/` 视频布局
+（覆盖 `asker.recategorize_videos`），因为 `eval_video2prompt.py` 的 `locate_video()`
+就指望这个布局。同时确认 `env.collectRGBVideo: true`，否则 mp4 不会被写出来。
+
+离线复跑：
+
+```bash
+pixi run -e ada-manip python scripts/eval_video2prompt.py \
+  --data_root third_party/ada_manip/eval_data \
+  --data_dir <run_dir 名字> \
+  --num_eval 12 \
+  --num_envs <numEnvs 与推理一致> \
+  --camera_id <与 task.adaptive_language.asker.camera_id 相同> \
+  --platform codex-cli \
+  --model gpt-5.5 \
+  --codex_cli_effort xhigh \
+  --prompt_style structured \
+  --frame_max_count 12 \
+  --trajectory_representation delta \
+  --trajectory_sample_points 0 \
+  --codex_cli_timeout 900
+```
+
+`--platform ground-truth` 走 `Video2PromptGroundTruth`，会以 `success` + `minimal_chain`
+直接给出上界。这条路也是验证 dump 完整性最快的烟雾测试。
+
+### 8.7 冒烟测试
 
 **测试 1：保持默认（自适应关闭）**——回归校验。
 

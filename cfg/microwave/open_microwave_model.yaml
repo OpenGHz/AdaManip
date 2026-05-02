@@ -4,6 +4,55 @@ task:
   num_episode: 1
   grasp: False
 
+  # Dump per-(episode, env) data in a layout that scripts/eval_video2prompt.py
+  # can replay (videos + 10-D action arrays + minimal_chain labels + ...).
+  # Independent of adaptive_language.enable: turn this on for pure
+  # data-collection rollouts (closed-loop Stage 2) where you only want the
+  # dump and skip any online asker. Forces a flat rgb_videos/episode_<eps>/
+  # layout (overrides adaptive_language.asker.recategorize_videos). Requires
+  # env.collectRGBVideo=true to actually save mp4s.
+  save_inference_data: true
+
+  # Adaptive language-conditioning eval loop. When enabled, each env runs an
+  # independent state machine across episodes: the first episode for each env
+  # samples clock_wise and a random chain id, calls the asker on the rollout
+  # video+actions, and locks the asker's chain id on success. Subsequent
+  # episodes freeze that env's clock_wise; locked envs reuse their chain id,
+  # unlocked envs draw the next untried chain id from the bank. Default OFF
+  # preserves the existing per-episode random behavior.
+  adaptive_language:
+    enable: true
+    max_retry_rounds: 3
+    asker:
+      platform: ground-truth        # ground-truth | codex-cli | claude-cli | gemini | foxcode | ""
+      model: gpt-5.5
+      mock: false
+      prompt_style: structured
+      check_success: together
+      frame_max_count: 12
+      frame_stride: 1
+      camera_id: 1
+      trajectory_context: true
+      trajectory_representation: delta
+      trajectory_sample_points: 0
+      recategorize_videos: true
+      lock_on_env_success: false
+      claude_cli_command: claude
+      claude_cli_skip_permissions: true
+      claude_cli_timeout: 900
+      codex_cli_command: codex
+      codex_cli_timeout: 900
+      codex_cli_sandbox: read-only
+      codex_cli_approval_policy: never
+      codex_cli_cd: ""
+      codex_cli_ephemeral: true
+      codex_cli_effort: xhigh
+      gemini_temperature: 1.0
+      gemini_thinking_budget: -1
+      gemini_image_thinking_budget: 0
+      gemini_upload_poll_interval: 1.0
+      gemini_upload_timeout: 600
+
 model:
   policy_mode: diffusion
   # policy_mode: flow_matching
@@ -55,7 +104,7 @@ env:
   start_index: 80
   collectDataPath: "microwave/0" # ../logs/_seed{}/***
   collectPC: False
-  collectRGBVideo: False
+  collectRGBVideo: True
   collectForce: True
   visualizePointcloud: False
   PointDownSampleNum: 2048
