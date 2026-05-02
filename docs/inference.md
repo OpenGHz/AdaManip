@@ -664,7 +664,26 @@ reset 路径：
 `clock_wise_override` 仅强制每个 env 的锁定状态；末端执行器/物体 root 状态仍由 `initial_*_states`
 重置，因此 episode 之间机器人会重新回到初始位姿，只是面板锁定情况保持一致。
 
-### 8.4 输出与视频目录布局
+### 8.4 自适应日志解释
+
+每个 episode 开始时会打印本轮每个 env 实际使用的 chain id：
+
+```text
+[adaptive] eps 1 chain ids per env: env0=T1, env1=T1, env2=T0, ...
+```
+
+含义：
+
+1. `eps 1`：当前是第 1 个 episode。
+2. `env0=T1`：env 0 本轮使用 chain id `1`。
+3. `T` 表示 trial / try，即该 env 还没有锁定 prompt，本轮是一次新尝试；本轮结束后会调用 asker 判断是否要锁定。
+4. `L` 表示 locked，即该 env 之前已经锁定 prompt，本轮直接复用锁定的 chain id，并跳过 asker。
+
+例如 `env2=T0` 表示 env 2 当前还未锁定，本轮尝试 chain id `0`；`env4=L1` 表示 env 4 已锁定，继续使用 chain id `1`。
+
+当某个 env 本轮需要调用 asker 时，episode 结束后会打印：
+
+### 8.5 输出与视频目录布局
 
 自适应模式同样写入 `eval_metrics.json`；每个 env 的 `adaptive` 字段会记录 asker 结果和锁定状态。
 
@@ -680,7 +699,7 @@ asker 的 success/failure 判定迁移到 `rgb_videos/{success|failure}/episode_
 `succ_rate` 仍然基于 env 自身的 `|env.one_dof_tensor[env_id, 0]| > pi/7` 阈值统计，
 不受 asker 判定影响——这样可以独立观察「policy 真正打开门的成功率」与「asker 关于轨迹的判读」是否一致。
 
-### 8.5 冒烟测试
+### 8.6 冒烟测试
 
 **测试 1：保持默认（自适应关闭）**——回归校验。
 
@@ -712,7 +731,7 @@ env:
 
 **测试 3：codex-cli asker（真实 LLM 路径）**——把 `asker.platform` 改为 `codex-cli`，模型按需调整，注意单次调用约 30s。
 
-### 8.6 风险与边界
+### 8.7 风险与边界
 
 1. asker 的 success 与 env 自己的 `done_flag` 不一致时：默认以 asker 为锁定权威；若希望以 env 阈值
    为准，把 `asker.lock_on_env_success: true` 打开。`succ_rate` 始终用 env 自身的阈值统计。

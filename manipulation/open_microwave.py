@@ -765,9 +765,13 @@ class OpenMicroWaveManipulation(BaseManipulation) :
                         done_flag=bool(done_flag[env_id]),
                         frozen_clock_wise=s.frozen_clock_wise,
                     )
+                    ground_truth_chain_id = self._microwave_ground_truth_chain_id(
+                        episode_clock_wise[env_id]
+                    )
                     print(
                         f"[adaptive] eps {eps + 1} env {env_id} done_flag={done_flag[env_id]} "
                         f"asker_success={asker_success} asker_chain_id={asker_chain_id} "
+                        f"ground_truth_chain_id={ground_truth_chain_id} "
                         f"current_chain_id={s.current_chain_id} tried={sorted(s.tried_chain_ids)} "
                         f"sweep={s.sweep_count}"
                     )
@@ -875,7 +879,7 @@ class OpenMicroWaveManipulation(BaseManipulation) :
             num_envs=self.env.num_envs,
         )
         self._write_eval_metrics(eval_save_dir, eval_metrics)
-        print(f"Saved eval metrics: {os.path.join(eval_save_dir, 'eval_metrics.json')}")
+        print(f"Saved eval metrics: {(Path(eval_save_dir) / 'eval_metrics.json').absolute()}")
         self.video_recorder = None
         return
 
