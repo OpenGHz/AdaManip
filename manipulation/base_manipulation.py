@@ -133,8 +133,9 @@ class BaseManipulation :
             "expanded_minimal_chains": expanded_minimal_chains,
             "attempt_chain_counts": attempt_chain_counts,
         }
-        if "success_check_additional_prompt" in task_spec:
-            expanded_payload["success_check_additional_prompt"] = task_spec["success_check_additional_prompt"]
+        for prompt_key in ("additional_prompt", "success_check_additional_prompt"):
+            if prompt_key in task_spec:
+                expanded_payload[prompt_key] = task_spec[prompt_key]
 
         with open(os.path.join(save_dir, "language_expanded.json"), "w", encoding="utf-8") as f:
             json.dump(expanded_payload, f, ensure_ascii=False, indent=2)
