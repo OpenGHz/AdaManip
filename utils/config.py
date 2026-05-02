@@ -94,12 +94,15 @@ def retrieve_cfg(args):
 
 def load_cfg(args):
 
-    with open(os.path.join(os.getcwd(), args.cfg_env), 'r') as f:
+    cfg_env_path = os.path.abspath(os.path.join(os.getcwd(), args.cfg_env))
+    with open(cfg_env_path, 'r') as f:
         cfg = yaml.load(f, Loader=yaml.SafeLoader)
     
     cfg["name"] = args.task
     cfg["headless"] = args.headless
     cfg["seed"] = args.seed
+    cfg["_cfg_env"] = args.cfg_env
+    cfg["_cfg_env_path"] = cfg_env_path
 
     cfg["env"]["asset"]["StartID"] = args.start_id
     

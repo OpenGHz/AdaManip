@@ -11,6 +11,7 @@ import av
 import shutil
 import time
 import json
+import yaml
 from pathlib import Path
 
 
@@ -190,6 +191,126 @@ class OpenMicroWaveManipulation(BaseManipulation) :
         dataset_path = dataset_path + "_" + run_ts
         return './eval_data/'+ dataset_path
 
+    def _write_eval_metrics(self, eval_save_dir, metrics):
+        os.makedirs(eval_save_dir, exist_ok=True)
+        metrics_path = os.path.join(eval_save_dir, "eval_metrics.json")
+        tmp_path = metrics_path + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(metrics, f, ensure_ascii=False, indent=2)
+        os.replace(tmp_path, metrics_path)
+
+    def _copy_eval_config(self, eval_save_dir):
+        os.makedirs(eval_save_dir, exist_ok=True)
+        target_path = os.path.join(eval_save_dir, "eval_config.yaml")
+        serializable_cfg = {
+            key: value
+            for key, value in self.cfg.items()
+            if not str(key).startswith("_")
+        }
+        with open(target_path, "w", encoding="utf-8") as f:
+            yaml.safe_dump(serializable_cfg, f, allow_unicode=True, sort_keys=False)
+        return target_path
+
+    def _update_eval_metrics_summary(self, metrics, total_elapsed_sec, status, num_envs):
+        episodes = metrics.get("episodes", [])
+        num_envs = int(num_envs)
+        episode_rates = [float(ep["success_rate"]) for ep in episodes]
+        episode_elapsed = [float(ep["elapsed_sec"]) for ep in episodes]
+        rollout_elapsed = [float(ep["rollout_elapsed_sec"]) for ep in episodes]
+        total_trials = len(episodes) * num_envs
+        total_successes = int(sum(int(ep["success_count"]) for ep in episodes))
+
+        per_env = []
+        total_asker_prompt_predictions = 0
+        total_asker_prompt_correct = 0
+        for env_id in range(num_envs):
+            env_records = []
+            for ep in episodes:
+                for env_record in ep.get("envs", []):
+                    if int(env_record["env_id"]) == env_id:
+                        env_records.append(env_record)
+                        break
+            env_successes = int(sum(1 for item in env_records if item.get("success")))
+            success_times = [
+                float(item["time_to_success_sec"])
+                for item in env_records
+                if item.get("time_to_success_sec") is not None
+            ]
+            asker_prompt_predictions = []
+            for item in env_records:
+                adaptive = item.get("adaptive") or {}
+                if adaptive.get("skipped"):
+                    continue
+                asker_chain_id = adaptive.get("asker_chain_id")
+                ground_truth_chain_id = item.get("ground_truth_chain_id")
+                if asker_chain_id is None or ground_truth_chain_id is None:
+                    continue
+                asker_prompt_predictions.append({
+                    "episode_id": int(item.get("episode_id", -1)) if "episode_id" in item else None,
+                    "asker_chain_id": int(asker_chain_id),
+                    "ground_truth_chain_id": int(ground_truth_chain_id),
+                    "correct": int(asker_chain_id) == int(ground_truth_chain_id),
+                })
+            asker_prompt_correct_count = int(sum(1 for item in asker_prompt_predictions if item["correct"]))
+            asker_prompt_prediction_count = len(asker_prompt_predictions)
+            total_asker_prompt_predictions += asker_prompt_prediction_count
+            total_asker_prompt_correct += asker_prompt_correct_count
+            last_asker_prediction = asker_prompt_predictions[-1] if asker_prompt_predictions else None
+
+            per_env_record = {
+                "env_id": env_id,
+                "episode_count": len(env_records),
+                "success_count": env_successes,
+                "success_rate": env_successes / len(env_records) if env_records else 0.0,
+                "mean_time_to_success_sec": float(np.mean(success_times)) if success_times else None,
+                "min_time_to_success_sec": float(np.min(success_times)) if success_times else None,
+                "max_time_to_success_sec": float(np.max(success_times)) if success_times else None,
+                "asker_prompt_prediction_count": asker_prompt_prediction_count,
+                "asker_prompt_correct_count": asker_prompt_correct_count,
+                "asker_prompt_accuracy": (
+                    asker_prompt_correct_count / asker_prompt_prediction_count
+                    if asker_prompt_prediction_count
+                    else None
+                ),
+                "asker_prompt_correct": (
+                    bool(last_asker_prediction["correct"])
+                    if last_asker_prediction is not None
+                    else None
+                ),
+                "last_asker_chain_id": (
+                    last_asker_prediction["asker_chain_id"]
+                    if last_asker_prediction is not None
+                    else None
+                ),
+                "last_ground_truth_chain_id": (
+                    last_asker_prediction["ground_truth_chain_id"]
+                    if last_asker_prediction is not None
+                    else None
+                ),
+            }
+            per_env.append(per_env_record)
+
+        metrics["overall"] = {
+            "status": status,
+            "completed_episodes": len(episodes),
+            "total_trials": total_trials,
+            "total_successes": total_successes,
+            "success_rate": total_successes / total_trials if total_trials else 0.0,
+            "mean_episode_success_rate": float(np.mean(episode_rates)) if episode_rates else 0.0,
+            "std_episode_success_rate": float(np.std(episode_rates)) if episode_rates else 0.0,
+            "total_elapsed_sec": float(total_elapsed_sec),
+            "mean_episode_elapsed_sec": float(np.mean(episode_elapsed)) if episode_elapsed else 0.0,
+            "mean_rollout_elapsed_sec": float(np.mean(rollout_elapsed)) if rollout_elapsed else 0.0,
+            "asker_prompt_prediction_count": total_asker_prompt_predictions,
+            "asker_prompt_correct_count": total_asker_prompt_correct,
+            "asker_prompt_accuracy": (
+                total_asker_prompt_correct / total_asker_prompt_predictions
+                if total_asker_prompt_predictions
+                else None
+            ),
+            "per_env": per_env,
+        }
+
     def _prepare_save_dir(self, save_dir, purpose):
         if not os.path.exists(save_dir):
             return
@@ -277,6 +398,61 @@ class OpenMicroWaveManipulation(BaseManipulation) :
         sampled_idx = int(np.random.randint(0, bank_size))
         sampled = embedding_bank[sampled_idx].unsqueeze(0).repeat(batch_size, 1)
         return sampled, sampled_idx
+
+    def _microwave_ground_truth_chain_id(self, clock_wise):
+        return 1 if int(round(float(clock_wise))) == 1 else 0
+
+    def _select_language_embedding_per_env(self, embedding_bank, chain_ids):
+        """Build a (num_envs, embed_dim) tensor from a per-env list of chain ids."""
+        if embedding_bank is None:
+            return None
+        import torch
+        index = torch.as_tensor(list(chain_ids), dtype=torch.long, device=embedding_bank.device)
+        return embedding_bank.index_select(0, index)
+
+    def _adaptive_video_path(self, eval_save_dir, eps_idx, env_id, camera_id):
+        return os.path.join(
+            eval_save_dir,
+            "rgb_videos",
+            f"episode_{eps_idx:04d}",
+            f"env_{env_id:02d}_cam_{camera_id:02d}.mp4",
+        )
+
+    def _adaptive_resolve_camera_id(self, asker_cfg):
+        cam_id = getattr(asker_cfg, "camera_id", 0)
+        if self.video_recorder is not None and self.video_recorder.camera_ids:
+            if cam_id in self.video_recorder.camera_ids:
+                return int(cam_id)
+            return int(self.video_recorder.camera_ids[0])
+        return int(cam_id)
+
+    def _adaptive_recategorize_videos(self, eval_save_dir, eps_idx, env_results):
+        """Move per-env videos from the flat episode dir into success|failure subdirs.
+
+        Mirrors EpisodeVideoRecorder.finish_episode's split logic and is a no-op
+        when the episode dir or camera files are absent. Best-effort: any
+        IOError is logged and silently swallowed.
+        """
+        if self.video_recorder is None:
+            return
+        rgb_root = os.path.join(eval_save_dir, "rgb_videos")
+        episode_dir = os.path.join(rgb_root, f"episode_{eps_idx:04d}")
+        if not os.path.isdir(episode_dir):
+            return
+        try:
+            for env_id, result in enumerate(env_results):
+                if result not in ("success", "failure"):
+                    continue
+                result_dir = os.path.join(rgb_root, result, f"episode_{eps_idx:04d}")
+                os.makedirs(result_dir, exist_ok=True)
+                for camera_id in self.video_recorder.camera_ids:
+                    src = os.path.join(episode_dir, f"env_{env_id:02d}_cam_{camera_id:02d}.mp4")
+                    if os.path.exists(src):
+                        shutil.move(src, os.path.join(result_dir, os.path.basename(src)))
+            if os.path.isdir(episode_dir) and not os.listdir(episode_dir):
+                os.rmdir(episode_dir)
+        except OSError as exc:
+            print(f"[adaptive] video recategorization for episode {eps_idx} failed: {exc}")
 
     '''
     test env
@@ -378,26 +554,138 @@ class OpenMicroWaveManipulation(BaseManipulation) :
         succ_rate = []
         language_embedding_bank = self._load_eval_language_embedding_bank(diffusion)
         eval_save_dir = self._build_eval_save_dir()
+        adaptive_cfg = self.cfg.get("task", {}).get("adaptive_language", {}) or {}
+        adaptive_enable = bool(adaptive_cfg.get("enable", False))
+        os.makedirs(eval_save_dir, exist_ok=True)
+        eval_config_path = self._copy_eval_config(eval_save_dir)
+        eval_started_at = time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime())
+        eval_timer_start = time.perf_counter()
+        eval_metrics = {
+            "schema_version": "v1",
+            "run_dir": eval_save_dir,
+            "config_path": eval_config_path,
+            "started_at": eval_started_at,
+            "finished_at": None,
+            "episodes": [],
+            "overall": {},
+        }
+        self._update_eval_metrics_summary(
+            eval_metrics,
+            0.0,
+            status="running",
+            num_envs=self.env.num_envs,
+        )
+        self._write_eval_metrics(eval_save_dir, eval_metrics)
         self._init_video_recorder(eval_save_dir)
+
+        if adaptive_enable and language_embedding_bank is None:
+            raise RuntimeError(
+                "task.adaptive_language.enable is True but the policy does not provide a language embedding bank "
+                "(set model.use_language_conditioning=True and supply language_embedding_dict.json)."
+            )
+        adaptive_states = None
+        adaptive_asker = None
+        adaptive_camera_id = 0
+        adaptive_rng = None
+        max_retry_rounds = int(adaptive_cfg.get("max_retry_rounds", 3))
+        if adaptive_enable:
+            from manipulation.adaptive_language_asker import (
+                AdaptiveLanguageAsker,
+                AdaptiveLanguageAskerConfig,
+                AdaptiveLanguageState,
+            )
+            asker_cfg = AdaptiveLanguageAskerConfig(adaptive_cfg.get("asker", {}))
+            template_path, task_spec = self.load_task_language_template("microwave")
+            expanded_minimal_chains = self.build_expanded_minimal_chains(task_spec["minimal_chains"])
+            num_chains = int(language_embedding_bank.shape[0])
+            if len(expanded_minimal_chains) != num_chains:
+                raise RuntimeError(
+                    f"adaptive_language: expanded_minimal_chains length {len(expanded_minimal_chains)} "
+                    f"!= embedding bank size {num_chains}; checkpoint and language_template are inconsistent."
+                )
+            adaptive_asker = AdaptiveLanguageAsker(
+                asker_cfg, task_spec, expanded_minimal_chains
+            )
+            adaptive_states = [
+                AdaptiveLanguageState(num_chains=num_chains)
+                for _ in range(self.env.num_envs)
+            ]
+            adaptive_camera_id = self._adaptive_resolve_camera_id(asker_cfg)
+            seed = int(self.cfg.get("seed", 0)) if self.cfg.get("seed", None) is not None else 0
+            adaptive_rng = random.Random(seed)
+            print(
+                f"[adaptive] enabled: platform={asker_cfg.platform}, model={asker_cfg.model}, "
+                f"num_chains={num_chains}, num_envs={self.env.num_envs}, camera_id={adaptive_camera_id}"
+            )
+
         for eps in range(eps_num):
             print("eps_{}".format(eps+1))
+            episode_started_at = time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime())
+            episode_timer_start = time.perf_counter()
             done_flag = [False] * self.env.num_envs
+            success_step = [None] * self.env.num_envs
+            time_to_success = [None] * self.env.num_envs
             episode_results = None
-            episode_language_embedding, sampled_language_idx = self._sample_episode_language_embedding(
-                language_embedding_bank, self.env.num_envs
-            )
-            if sampled_language_idx is not None:
-                print(f'episode {eps + 1} language embedding id: {sampled_language_idx}')
-            self.env.reset(clock_same=False)
+            sampled_language_idx = None
+            chain_ids = None
+            adaptive_asker_records = [None] * self.env.num_envs if adaptive_enable else None
+
+            if adaptive_enable:
+                chain_ids = []
+                for s in adaptive_states:
+                    if s.locked_chain_id is not None:
+                        chain_ids.append(s.locked_chain_id)
+                        s.current_chain_id = s.locked_chain_id
+                    else:
+                        cid = s.pick_next(adaptive_rng)
+                        s.current_chain_id = cid
+                        s.tried_chain_ids.add(cid)
+                        chain_ids.append(cid)
+                episode_language_embedding = self._select_language_embedding_per_env(
+                    language_embedding_bank, chain_ids
+                )
+                print(
+                    f"[adaptive] eps {eps + 1} chain ids per env: " +
+                    ", ".join(
+                        f"env{env_id}={'L' if s.locked_chain_id is not None else 'T'}{cid}"
+                        for env_id, (s, cid) in enumerate(zip(adaptive_states, chain_ids))
+                    )
+                )
+            else:
+                episode_language_embedding, sampled_language_idx = self._sample_episode_language_embedding(
+                    language_embedding_bank, self.env.num_envs
+                )
+                if sampled_language_idx is not None:
+                    print(f'episode {eps + 1} language embedding id: {sampled_language_idx}')
+
+            if adaptive_enable and eps > 0 and any(s.frozen_clock_wise is not None for s in adaptive_states):
+                override = [float(s.frozen_clock_wise) for s in adaptive_states]
+                self.env.reset(clock_wise_override=override)
+            else:
+                self.env.reset(clock_same=False)
+            if adaptive_enable and eps == 0:
+                cw = self.env.clock_wise.detach().cpu().numpy().tolist()
+                for env_id, s in enumerate(adaptive_states):
+                    s.frozen_clock_wise = float(cw[env_id])
+                print(f"[adaptive] eps 1 frozen clock_wise per env: {[s.frozen_clock_wise for s in adaptive_states]}")
+            episode_clock_wise = [
+                float(value)
+                for value in self.env.clock_wise.detach().cpu().numpy().tolist()
+            ]
+
             self.env.gripper = torch.zeros((self.env.num_envs,1),device=self.env.device)
             if self.video_recorder is not None:
                 self.video_recorder.start_episode(eps)
                 self._record_video_frame()
-            
+
             obs = self.env.collect_diff_data()
             pcs, env_state = obs_wrapper(obs)
             pcs_deque = collections.deque([pcs] * diffusion.args.obs_horizon, maxlen=diffusion.args.obs_horizon)
             env_state_deque = collections.deque([env_state] * diffusion.args.obs_horizon, maxlen=diffusion.args.obs_horizon)
+
+            episode_action_logs = (
+                [[] for _ in range(self.env.num_envs)] if adaptive_enable else None
+            )
 
             try:
                 step = 0
@@ -418,14 +706,20 @@ class OpenMicroWaveManipulation(BaseManipulation) :
 
                         self._record_video_frame()
                         self.env.actions = action[:, act, :]
+                        if adaptive_enable:
+                            action_step = action[:, act, :].detach().cpu().numpy()
+                            for env_id in range(self.env.num_envs):
+                                episode_action_logs[env_id].append(action_step[env_id])
                         obs = self.env.collect_diff_data()
                         pcs, env_state = obs_wrapper(obs)
                         pcs_deque.append(pcs)
                         env_state_deque.append(env_state)
-                    
+
                     for env_id in range(self.env.num_envs):
                         if (torch.abs(self.env.one_dof_tensor[env_id, 0]) > np.pi/7).cpu().item() and not done_flag[env_id]:
                             done_flag[env_id] = True
+                            success_step[env_id] = int(step)
+                            time_to_success[env_id] = float(time.perf_counter() - episode_timer_start)
                             succ_cnt += 1
                             print(f"Env {env_id} Succeeded")
 
@@ -434,17 +728,157 @@ class OpenMicroWaveManipulation(BaseManipulation) :
                 if self.video_recorder is not None:
                     if episode_results is None:
                         self.video_recorder.discard_episode()
+                    elif adaptive_enable:
+                        # Flatten videos to rgb_videos/episode_<eps>/env_<id>_cam_<cam>.mp4 so the asker
+                        # can read them. Recategorization happens after the asker call below.
+                        self.video_recorder.finish_episode(env_results=None)
                     else:
                         self.video_recorder.finish_episode(episode_results)
-            cur_rate = succ_cnt/(self.env.num_envs)
+
+            rollout_elapsed_sec = float(time.perf_counter() - episode_timer_start)
+
+            if adaptive_enable and episode_results is not None:
+                recategorize = []
+                lock_on_env_success = bool(adaptive_cfg.get("asker", {}).get("lock_on_env_success", False))
+                for env_id, s in enumerate(adaptive_states):
+                    if s.locked_chain_id is not None:
+                        adaptive_asker_records[env_id] = {
+                            "skipped": True,
+                            "reason": "already_locked",
+                            "locked_chain_id": int(s.locked_chain_id),
+                            "current_chain_id": int(s.current_chain_id) if s.current_chain_id is not None else None,
+                            "tried_chain_ids": sorted(int(item) for item in s.tried_chain_ids),
+                            "sweep_count": int(s.sweep_count),
+                        }
+                        recategorize.append("success")
+                        continue
+                    video_path = self._adaptive_video_path(eval_save_dir, eps, env_id, adaptive_camera_id)
+                    actions_arr = (
+                        np.stack(episode_action_logs[env_id])
+                        if episode_action_logs and episode_action_logs[env_id]
+                        else None
+                    )
+                    asker_success, asker_chain_id = adaptive_asker.ask(
+                        video_path=video_path if os.path.exists(video_path) else None,
+                        action_array=actions_arr,
+                        env_id=env_id,
+                        done_flag=bool(done_flag[env_id]),
+                        frozen_clock_wise=s.frozen_clock_wise,
+                    )
+                    print(
+                        f"[adaptive] eps {eps + 1} env {env_id} done_flag={done_flag[env_id]} "
+                        f"asker_success={asker_success} asker_chain_id={asker_chain_id} "
+                        f"current_chain_id={s.current_chain_id} tried={sorted(s.tried_chain_ids)} "
+                        f"sweep={s.sweep_count}"
+                    )
+                    if asker_success and asker_chain_id is not None:
+                        s.locked_chain_id = asker_chain_id
+                        recategorize.append("success")
+                    elif lock_on_env_success and done_flag[env_id]:
+                        s.locked_chain_id = s.current_chain_id
+                        recategorize.append("success")
+                    else:
+                        if s.sweep_count >= max_retry_rounds:
+                            fallback = asker_chain_id if asker_chain_id is not None else s.current_chain_id
+                            print(
+                                f"[adaptive] eps {eps + 1} env {env_id} max_retry_rounds={max_retry_rounds} reached; "
+                                f"force-locking chain_id={fallback}"
+                            )
+                            s.locked_chain_id = fallback
+                            recategorize.append("success" if done_flag[env_id] else "failure")
+                        else:
+                            recategorize.append("success" if done_flag[env_id] else "failure")
+                    adaptive_asker_records[env_id] = {
+                        "skipped": False,
+                        "asker_success": bool(asker_success),
+                        "asker_chain_id": int(asker_chain_id) if asker_chain_id is not None else None,
+                        "current_chain_id": int(s.current_chain_id) if s.current_chain_id is not None else None,
+                        "locked_chain_id": int(s.locked_chain_id) if s.locked_chain_id is not None else None,
+                        "tried_chain_ids": sorted(int(item) for item in s.tried_chain_ids),
+                        "sweep_count": int(s.sweep_count),
+                        "video_path": video_path if os.path.exists(video_path) else None,
+                    }
+                if bool(adaptive_cfg.get("asker", {}).get("recategorize_videos", True)):
+                    self._adaptive_recategorize_videos(eval_save_dir, eps, recategorize)
+
+            episode_elapsed_sec = float(time.perf_counter() - episode_timer_start)
+            final_open_dof = [
+                float(value)
+                for value in self.env.one_dof_tensor[:, 0].detach().cpu().numpy().tolist()
+            ]
+            env_metrics = []
+            for env_id in range(self.env.num_envs):
+                env_record = {
+                    "env_id": int(env_id),
+                    "episode_id": int(eps),
+                    "success": bool(done_flag[env_id]),
+                    "success_step": success_step[env_id],
+                    "time_to_success_sec": time_to_success[env_id],
+                    "episode_elapsed_sec": episode_elapsed_sec,
+                    "rollout_elapsed_sec": rollout_elapsed_sec,
+                    "clock_wise": episode_clock_wise[env_id],
+                    "ground_truth_chain_id": self._microwave_ground_truth_chain_id(
+                        episode_clock_wise[env_id]
+                    ),
+                    "final_open_dof": final_open_dof[env_id],
+                }
+                if adaptive_enable:
+                    env_record["language_chain_id"] = int(chain_ids[env_id]) if chain_ids is not None else None
+                    env_record["adaptive"] = adaptive_asker_records[env_id]
+                else:
+                    env_record["language_chain_id"] = int(sampled_language_idx) if sampled_language_idx is not None else None
+                env_metrics.append(env_record)
+
+            episode_success_count = int(sum(1 for item in done_flag if item))
+            cur_rate = episode_success_count/(self.env.num_envs)
+            episode_record = {
+                "episode_id": int(eps),
+                "episode_number": int(eps + 1),
+                "started_at": episode_started_at,
+                "finished_at": time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime()),
+                "elapsed_sec": episode_elapsed_sec,
+                "rollout_elapsed_sec": rollout_elapsed_sec,
+                "success_count": episode_success_count,
+                "num_envs": int(self.env.num_envs),
+                "success_rate": float(cur_rate),
+                "sampled_language_id": int(sampled_language_idx) if sampled_language_idx is not None else None,
+                "per_env_language_ids": [int(item) for item in chain_ids] if chain_ids is not None else None,
+                "envs": env_metrics,
+            }
+            eval_metrics["episodes"].append(episode_record)
+            self._update_eval_metrics_summary(
+                eval_metrics,
+                total_elapsed_sec=time.perf_counter() - eval_timer_start,
+                status="running",
+                num_envs=self.env.num_envs,
+            )
+            self._write_eval_metrics(eval_save_dir, eval_metrics)
+
             print(f"Eps {eps+1}, current succ rate {cur_rate}")
             succ_rate.append(cur_rate)
             succ_cnt = 0
         print(f"Average Success rate: {np.mean(succ_rate)}")
         print(f"Success rate std: {np.std(succ_rate)}")
+        if adaptive_enable:
+            print(
+                "[adaptive] final per-env locked_chain_id: " +
+                ", ".join(
+                    f"env{env_id}=cw={s.frozen_clock_wise}|locked={s.locked_chain_id}|tried={sorted(s.tried_chain_ids)}|sweep={s.sweep_count}"
+                    for env_id, s in enumerate(adaptive_states)
+                )
+            )
+        eval_metrics["finished_at"] = time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime())
+        self._update_eval_metrics_summary(
+            eval_metrics,
+            total_elapsed_sec=time.perf_counter() - eval_timer_start,
+            status="completed",
+            num_envs=self.env.num_envs,
+        )
+        self._write_eval_metrics(eval_save_dir, eval_metrics)
+        print(f"Saved eval metrics: {os.path.join(eval_save_dir, 'eval_metrics.json')}")
         self.video_recorder = None
-        return                
-    
+        return
+
     def process_data(self, goal_pos):
         obs = self.env.collect_diff_data()
         pc, env_state = obs_wrapper(obs)

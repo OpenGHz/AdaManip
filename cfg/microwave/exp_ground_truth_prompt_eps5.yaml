@@ -1,0 +1,189 @@
+task:
+  task_name: open_microwave
+  policy: adaptive
+  num_episode: 5
+  grasp: false
+  adaptive_language:
+    enable: true
+    max_retry_rounds: 3
+    asker:
+      platform: ground-truth
+      model: gpt-5.5
+      mock: false
+      prompt_style: structured
+      check_success: together
+      frame_max_count: 12
+      frame_stride: 1
+      camera_id: 1
+      trajectory_context: true
+      trajectory_representation: delta
+      trajectory_sample_points: 0
+      recategorize_videos: true
+      lock_on_env_success: false
+      claude_cli_command: claude
+      claude_cli_skip_permissions: true
+      claude_cli_timeout: 900
+      codex_cli_command: codex
+      codex_cli_timeout: 900
+      codex_cli_sandbox: read-only
+      codex_cli_approval_policy: never
+      codex_cli_cd: ''
+      codex_cli_ephemeral: true
+      codex_cli_effort: xhigh
+      gemini_temperature: 1.0
+      gemini_thinking_budget: -1
+      gemini_image_thinking_budget: 0
+      gemini_upload_poll_interval: 1.0
+      gemini_upload_timeout: 600
+model:
+  policy_mode: diffusion
+  obs_horizon: 2
+  action_horizon: 1
+  pred_horizon: 4
+  num_diffusion_iters: 100
+  flow_sampling_steps: 100
+  flow_beta_alpha: 1.5
+  flow_beta_beta: 1.0
+  flow_tau_cutoff: 0.999
+  discrete: false
+  input_feat: 3
+  feat_dim: 128
+  dof_dim: 0
+  action_dim: 10
+  Transformer: false
+  grasp: false
+  grasp_model_path: None
+  diffusion_model_path: logs/microwave/manip/Mar17/13-38-17/ema_nets.pth
+  use_language_conditioning: true
+  language_input_dim: 512
+  language_proj_dim: 128
+env:
+  env_name: open microwave
+  numEnvs: 10
+  numObservations: 26
+  numActions: 10
+  envSpacing: 2.0
+  horizon: 30
+  clockwise: 0.5
+  randomPose: 0.0
+  pc_normalize: true
+  actionSpeedScale: 20
+  enableDebugVis: false
+  enableCameraSensors: true
+  enableForceSensors: false
+  collectData: true
+  collect_all: true
+  start_index: 80
+  collectDataPath: microwave/0
+  collectPC: false
+  collectRGBVideo: false
+  collectForce: true
+  visualizePointcloud: false
+  PointDownSampleNum: 2048
+  rgbVideo:
+    cameraType: fixed
+    cameraIds: []
+    fps: 10
+    codec: libx264
+    crf: 18
+    preset: fast
+  reset:
+    bottle:
+      resetPositionNoise: 0.0
+      resetRotationNoise: 0.0
+      resetDofPosRandomInterval: 0.0
+      resetDofVelRandomInterval: 0.0
+    franka:
+      resetPositionNoise: 0.0
+      resetRotationNoise: 0.0
+      resetDofPosRandomInterval: 0.0
+      resetDofVelRandomInterval: 0.0
+  driveMode: osc
+  clipObservations: 5.0
+  clipActions: 1.0
+  cam:
+    width: 128
+    height: 128
+    cam_far_plane: 100
+    cam_near_plane: 0.01
+    cam_horizontal_fov: 85
+    cam_start:
+    - - 0.15
+      - -0.5
+      - 0.8
+    - - 0.15
+      - 0.5
+      - 0.8
+    cam_target:
+    - - 0
+      - 0
+      - 0.7
+    - - 0
+      - 0
+      - 0.7
+  asset:
+    assetRoot: ./assets
+    datasetPath: microwave
+    AssetNum: 10
+    randomAsset: false
+    load_block: test
+    StartID: 0
+    Assets:
+      test:
+        mv_2:
+          bounding_box: mv_2/bounding_box.json
+          name: mv_2
+          path: mv_2/mobility.urdf
+        mv_3:
+          bounding_box: mv_3/bounding_box.json
+          name: mv_3
+          path: mv_3/mobility.urdf
+        mv_4:
+          bounding_box: mv_4/bounding_box.json
+          name: mv_4
+          path: mv_4/mobility.urdf
+        mv_5:
+          bounding_box: mv_5/bounding_box.json
+          name: mv_5
+          path: mv_5/mobility.urdf
+        mv_6:
+          bounding_box: mv_6/bounding_box.json
+          name: mv_6
+          path: mv_6/mobility.urdf
+        mv_7:
+          bounding_box: mv_7/bounding_box.json
+          name: mv_7
+          path: mv_7/mobility.urdf
+        mv_8:
+          bounding_box: mv_8/bounding_box.json
+          name: mv_8
+          path: mv_8/mobility.urdf
+        mv_9:
+          bounding_box: mv_9/bounding_box.json
+          name: mv_9
+          path: mv_9/mobility.urdf
+        mv_10:
+          bounding_box: mv_10/bounding_box.json
+          name: mv_10
+          path: mv_10/mobility.urdf
+        mv_11:
+          bounding_box: mv_11/bounding_box.json
+          name: mv_11
+          path: mv_11/mobility.urdf
+sim:
+  substeps: 2
+  physx:
+    num_threads: 4
+    solver_type: 1
+    num_position_iterations: 8
+    num_velocity_iterations: 0
+    contact_offset: 0.002
+    rest_offset: 0.0
+    bounce_threshold_velocity: 0.2
+    max_depenetration_velocity: 1000.0
+    default_buffer_size_multiplier: 5.0
+  flex:
+    num_outer_iterations: 5
+    num_inner_iterations: 20
+    warm_start: 0.8
+    relaxation: 0.75

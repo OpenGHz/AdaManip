@@ -585,9 +585,9 @@ class OpenMicroWave(BaseEnv):
         cabinet_start_pose.r = gymapi.Quat(0.0, 0.0, 1.0, 0.0)
         return cabinet_start_pose
 
-    def reset(self, to_reset="all", clock_same=True):
+    def reset(self, to_reset="all", clock_same=True, clock_wise_override=None):
 
-        self._partial_reset(to_reset, clock_same)
+        self._partial_reset(to_reset, clock_same, clock_wise_override=clock_wise_override)
 
         self.gym.simulate(self.sim)
         self.gym.fetch_results(self.sim, True)
@@ -603,7 +603,7 @@ class OpenMicroWave(BaseEnv):
         self.extras["success_rate"] = self.success_rate
         return self.obs_buf, self.rew_buf, self.reset_buf, None
 
-    def _partial_reset(self, to_reset="all", clock_same=True):
+    def _partial_reset(self, to_reset="all", clock_same=True, clock_wise_override=None):
 
         """
         reset those need to be reseted
@@ -612,7 +612,20 @@ class OpenMicroWave(BaseEnv):
         if to_reset == "all":
             to_reset = np.ones((self.env_num,))
         reseted = False
-        if clock_same:
+        if clock_wise_override is not None:
+            override = clock_wise_override
+            if isinstance(override, torch.Tensor):
+                override_tensor = override.to(device=self.device, dtype=torch.float32)
+            else:
+                override_tensor = torch.as_tensor(
+                    np.asarray(override), device=self.device, dtype=torch.float32
+                )
+            if override_tensor.shape != (self.env_num,):
+                raise ValueError(
+                    f"clock_wise_override must have shape ({self.env_num},); got {tuple(override_tensor.shape)}"
+                )
+            self.clock_wise = override_tensor
+        elif clock_same:
             self.clock_wise = torch.zeros((self.env_num,), device=self.device) + (np.random.rand() < self.cfg["env"]["clockwise"])
         else:
             self.clock_wise = torch.zeros((self.env_num,), device=self.device) + torch.tensor(np.random.rand(self.env_num) < self.cfg["env"]["clockwise"]).to(self.device)
