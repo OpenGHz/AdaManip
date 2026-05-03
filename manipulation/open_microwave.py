@@ -235,6 +235,8 @@ class OpenMicroWaveManipulation(BaseManipulation) :
         per_env = []
         total_asker_prompt_predictions = 0
         total_asker_prompt_correct = 0
+        total_asker_prompt_unknown = 0
+        total_asker_prompt_incorrect = 0
         for env_id in range(num_envs):
             env_records = []
             for ep in episodes:
@@ -264,18 +266,27 @@ class OpenMicroWaveManipulation(BaseManipulation) :
                     expanded_minimal_chains,
                 )
                 strict_ground_truth_correct = int(asker_chain_id) == int(ground_truth_chain_id)
+                correctness = self._asker_prompt_correctness(
+                    asker_chain_id,
+                    ground_truth_chain_id,
+                    reasonable_prediction_chain_ids,
+                )
                 asker_prompt_predictions.append({
                     "episode_id": int(item.get("episode_id", -1)) if "episode_id" in item else None,
                     "asker_chain_id": int(asker_chain_id),
                     "ground_truth_chain_id": int(ground_truth_chain_id),
                     "reasonable_prediction_chain_ids": reasonable_prediction_chain_ids,
                     "strict_ground_truth_correct": strict_ground_truth_correct,
-                    "correct": int(asker_chain_id) in reasonable_prediction_chain_ids,
+                    "correct": correctness,
                 })
-            asker_prompt_correct_count = int(sum(1 for item in asker_prompt_predictions if item["correct"]))
+            asker_prompt_correct_count = int(sum(1 for item in asker_prompt_predictions if item["correct"] is True))
+            asker_prompt_unknown_count = int(sum(1 for item in asker_prompt_predictions if item["correct"] is None))
+            asker_prompt_incorrect_count = int(sum(1 for item in asker_prompt_predictions if item["correct"] is False))
             asker_prompt_prediction_count = len(asker_prompt_predictions)
             total_asker_prompt_predictions += asker_prompt_prediction_count
             total_asker_prompt_correct += asker_prompt_correct_count
+            total_asker_prompt_unknown += asker_prompt_unknown_count
+            total_asker_prompt_incorrect += asker_prompt_incorrect_count
             last_asker_prediction = asker_prompt_predictions[-1] if asker_prompt_predictions else None
 
             per_env_record = {
@@ -288,6 +299,8 @@ class OpenMicroWaveManipulation(BaseManipulation) :
                 "max_time_to_success_sec": float(np.max(success_times)) if success_times else None,
                 "asker_prompt_prediction_count": asker_prompt_prediction_count,
                 "asker_prompt_correct_count": asker_prompt_correct_count,
+                "asker_prompt_unknown_count": asker_prompt_unknown_count,
+                "asker_prompt_incorrect_count": asker_prompt_incorrect_count,
                 "asker_prompt_accuracy": (
                     asker_prompt_correct_count / asker_prompt_prediction_count
                     if asker_prompt_prediction_count
@@ -334,6 +347,8 @@ class OpenMicroWaveManipulation(BaseManipulation) :
             "mean_rollout_elapsed_sec": float(np.mean(rollout_elapsed)) if rollout_elapsed else 0.0,
             "asker_prompt_prediction_count": total_asker_prompt_predictions,
             "asker_prompt_correct_count": total_asker_prompt_correct,
+            "asker_prompt_unknown_count": total_asker_prompt_unknown,
+            "asker_prompt_incorrect_count": total_asker_prompt_incorrect,
             "asker_prompt_accuracy": (
                 total_asker_prompt_correct / total_asker_prompt_predictions
                 if total_asker_prompt_predictions
@@ -464,6 +479,23 @@ class OpenMicroWaveManipulation(BaseManipulation) :
             for chain_id, chain in enumerate(expanded_minimal_chains)
             if tuple(chain) in reasonable_keys
         ]
+
+    def _asker_prompt_correctness(
+        self,
+        asker_chain_id,
+        ground_truth_chain_id,
+        reasonable_prediction_chain_ids,
+    ):
+        if asker_chain_id is None:
+            return None
+        asker_chain_id = int(asker_chain_id)
+        if asker_chain_id in reasonable_prediction_chain_ids:
+            return True
+        if ground_truth_chain_id is not None:
+            ground_truth_chain_id = int(ground_truth_chain_id)
+            if asker_chain_id == ground_truth_chain_id:
+                return None
+        return False
 
     def _select_language_embedding_per_env(self, embedding_bank, chain_ids):
         """Build a (num_envs, embed_dim) tensor from a per-env list of chain ids."""
@@ -1047,11 +1079,17 @@ class OpenMicroWaveManipulation(BaseManipulation) :
                         ground_truth_chain_id,
                         adaptive_expanded_chains,
                     )
+                    asker_prompt_correct = self._asker_prompt_correctness(
+                        asker_chain_id,
+                        ground_truth_chain_id,
+                        reasonable_prediction_chain_ids,
+                    )
                     print(
                         f"[adaptive] eps {eps + 1} env {env_id} done_flag={done_flag[env_id]} "
                         f"asker_success={asker_success} asker_chain_id={asker_chain_id} "
                         f"ground_truth_chain_id={ground_truth_chain_id} "
                         f"reasonable_prediction_chain_ids={reasonable_prediction_chain_ids} "
+                        f"asker_prompt_correct={asker_prompt_correct} "
                         f"current_chain_id={s.current_chain_id} tried={sorted(s.tried_chain_ids)} "
                         f"sweep={s.sweep_count}"
                     )
@@ -1078,8 +1116,9 @@ class OpenMicroWaveManipulation(BaseManipulation) :
                         "asker_chain_id": int(asker_chain_id) if asker_chain_id is not None else None,
                         "ground_truth_chain_id": int(ground_truth_chain_id),
                         "reasonable_prediction_chain_ids": reasonable_prediction_chain_ids,
+                        "asker_prompt_correct": asker_prompt_correct,
                         "asker_reasonable_prediction_correct": (
-                            int(asker_chain_id) in reasonable_prediction_chain_ids
+                            asker_prompt_correct is True
                             if asker_chain_id is not None
                             else None
                         ),

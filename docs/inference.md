@@ -392,13 +392,14 @@ eval_data/
 4. `asker_chain_id`：asker 返回的 chain id；当 asker 失败或未返回可识别 chain 时为 `null`。
 5. `ground_truth_chain_id`：该 env 本轮真实机构状态对应的 chain id。
 6. `reasonable_prediction_chain_ids`：基于本轮 `language_chain_id` 和可观察 `attempt_chain`，asker 可以合理返回的 chain id 集合。
-7. `asker_reasonable_prediction_correct`：`asker_chain_id` 是否落在 `reasonable_prediction_chain_ids` 中。
-8. `asker_strict_ground_truth_correct`：`asker_chain_id == ground_truth_chain_id`，仅用于辅助诊断，不再作为主准确率口径。
-9. `current_chain_id`：本 episode rollout 时实际输入策略的 chain id。
-10. `locked_chain_id`：该 env 当前已经锁定、后续 episode 会复用的 chain id；尚未锁定时为 `null`。
-11. `tried_chain_ids`：该 env 当前 sweep 中已经尝试过的 chain id 列表。
-12. `sweep_count`：chain id 全部尝试后重置 `tried_chain_ids` 的次数；达到 `max_retry_rounds` 后会强制锁定 fallback chain。
-13. `video_path`：传给 asker 的视频路径；未启用视频、文件不存在或跳过 asker 时可能为 `null` 或不存在。
+7. `asker_prompt_correct`：三元正确性。`true` 表示 `asker_chain_id` 命中 `reasonable_prediction_chain_ids`；`null` 表示未命中 reasonable 但 `asker_chain_id == ground_truth_chain_id` 严格相等；`false` 表示两者都不满足。
+8. `asker_reasonable_prediction_correct`：`asker_chain_id` 是否落在 `reasonable_prediction_chain_ids` 中；没有可识别 `asker_chain_id` 时为 `null`。
+9. `asker_strict_ground_truth_correct`：`asker_chain_id == ground_truth_chain_id`，仅用于辅助诊断，不再作为主准确率口径。
+10. `current_chain_id`：本 episode rollout 时实际输入策略的 chain id。
+11. `locked_chain_id`：该 env 当前已经锁定、后续 episode 会复用的 chain id；尚未锁定时为 `null`。
+12. `tried_chain_ids`：该 env 当前 sweep 中已经尝试过的 chain id 列表。
+13. `sweep_count`：chain id 全部尝试后重置 `tried_chain_ids` 的次数；达到 `max_retry_rounds` 后会强制锁定 fallback chain。
+14. `video_path`：传给 asker 的视频路径；未启用视频、文件不存在或跳过 asker 时可能为 `null` 或不存在。
 
 `overall` 是整体汇总：
 
@@ -413,19 +414,26 @@ eval_data/
 9. `mean_rollout_elapsed_sec`。
 10. `asker_prompt_prediction_count`：实际调用 asker 且返回了可识别 chain id 的预测次数。
 11. `asker_prompt_correct_count`：`asker_chain_id` 命中 `reasonable_prediction_chain_ids` 的次数。
-12. `asker_prompt_accuracy`：整体 asker prompt 合理预测准确率，即 `asker_prompt_correct_count / asker_prompt_prediction_count`；没有可统计预测时为 `null`。
-13. `per_env`：每个 env 跨 episode 的汇总。
+12. `asker_prompt_unknown_count`：`asker_chain_id` 未命中 reasonable 但严格等于 `ground_truth_chain_id` 的次数。
+13. `asker_prompt_incorrect_count`：`asker_chain_id` 既未命中 reasonable、也不严格等于 `ground_truth_chain_id` 的次数。
+14. `asker_prompt_accuracy`：整体 asker prompt 合理预测准确率，即 `asker_prompt_correct_count / asker_prompt_prediction_count`；没有可统计预测时为 `null`。
+15. `per_env`：每个 env 跨 episode 的汇总。
 
 `overall.per_env[*]` 中除成功率和耗时字段外，还包含 asker prompt 正确性字段：
 
 1. `asker_prompt_prediction_count`：该 env 实际调用 asker 且返回了可识别 chain id 的次数。
 2. `asker_prompt_correct_count`：该 env 中 `asker_chain_id` 命中 `reasonable_prediction_chain_ids` 的次数。
-3. `asker_prompt_accuracy`：该 env 的 prompt 预测准确率；没有可统计预测时为 `null`。
-4. `asker_prompt_correct`：该 env 最近一次可统计 asker 预测是否正确；没有可统计预测时为 `null`。
-5. `last_asker_chain_id`：该 env 最近一次可统计 asker 预测的 chain id。
-6. `last_ground_truth_chain_id`：该 env 最近一次可统计预测对应的 ground-truth chain id。
-7. `last_reasonable_prediction_chain_ids`：该 env 最近一次可统计预测对应的合理 chain id 集合。
-8. `last_strict_ground_truth_correct`：该 env 最近一次可统计预测是否严格等于 ground truth，仅用于排查歧义场景。
+3. `asker_prompt_unknown_count`：该 env 中 `asker_chain_id` 未命中 reasonable 但严格等于 `ground_truth_chain_id` 的次数。
+4. `asker_prompt_incorrect_count`：该 env 中 `asker_chain_id` 既未命中 reasonable、也不严格等于 `ground_truth_chain_id` 的次数。
+5. `asker_prompt_accuracy`：该 env 的 prompt 合理预测准确率；没有可统计预测时为 `null`。
+6. `asker_prompt_correct`：该 env 最近一次可统计 asker 预测的三元正确性；没有可统计预测时为 `null`。
+7. `last_asker_chain_id`：该 env 最近一次可统计 asker 预测的 chain id。
+8. `last_ground_truth_chain_id`：该 env 最近一次可统计预测对应的 ground-truth chain id。
+9. `last_reasonable_prediction_chain_ids`：该 env 最近一次可统计预测对应的合理 chain id 集合。
+10. `last_strict_ground_truth_correct`：该 env 最近一次可统计预测是否严格等于 ground truth，仅用于排查歧义场景。
+
+注意：`asker_prompt_correct` 的 `null` 同时可能表示“三元判定中的 None”或“没有可统计预测”。需要结合
+`asker_prompt_prediction_count`、`asker_prompt_unknown_count` 一起区分。
 
 #### 5.1.2 非自适应模式的视频文件
 
@@ -744,7 +752,7 @@ reset 路径：
 当某个 env 本轮需要调用 asker 时，episode 结束后会打印：
 
 ```text
-[adaptive] eps 1 env 0 done_flag=True asker_success=True asker_chain_id=0 ground_truth_chain_id=1 reasonable_prediction_chain_ids=[1] current_chain_id=0 tried=[0] sweep=0
+[adaptive] eps 1 env 0 done_flag=True asker_success=True asker_chain_id=0 ground_truth_chain_id=1 reasonable_prediction_chain_ids=[1] asker_prompt_correct=False current_chain_id=0 tried=[0] sweep=0
 ```
 
 字段含义：
@@ -754,9 +762,10 @@ reset 路径：
 3. `asker_chain_id=0`：asker 根据本轮视频/轨迹返回的 chain id。
 4. `ground_truth_chain_id=1`：由当前 env 的真实机构状态得到的正确 chain id。microwave 任务中，`clock_wise=0` 时为 `0`（`拉门`），`clock_wise=1` 时为 `1`（`按按钮 -> 拉门`）。
 5. `reasonable_prediction_chain_ids=[1]`：基于本轮可观察到的 `attempt_chain`，asker 可以合理返回的 chain id 集合。主准确率口径使用 `asker_chain_id in reasonable_prediction_chain_ids`。
-6. `current_chain_id=0`：本轮 rollout 实际输入策略的 chain id。它可能与 `asker_chain_id` 不同，因为 `current_chain_id` 是本轮先尝试的 prompt，而 `asker_chain_id` 是事后根据轨迹推断出的正确 prompt。
-7. `tried=[0]`：该 env 当前 sweep 中已经尝试过、但在本轮开始前尚未锁定的 chain id 集合。这里表示 env 0 已经尝试过 chain id `0`。
-8. `sweep=0`：该 env 已经把所有 chain id 尝试完并重置 `tried` 的次数；`0` 表示还没有完整扫过一轮。
+6. `asker_prompt_correct=False`：三元正确性；`True` 表示命中 reasonable，`None` 表示未命中 reasonable 但与 `ground_truth_chain_id` 严格相等，`False` 表示两者都不满足。
+7. `current_chain_id=0`：本轮 rollout 实际输入策略的 chain id。它可能与 `asker_chain_id` 不同，因为 `current_chain_id` 是本轮先尝试的 prompt，而 `asker_chain_id` 是事后根据轨迹推断出的正确 prompt。
+8. `tried=[0]`：该 env 当前 sweep 中已经尝试过、但在本轮开始前尚未锁定的 chain id 集合。这里表示 env 0 已经尝试过 chain id `0`。
+9. `sweep=0`：该 env 已经把所有 chain id 尝试完并重置 `tried` 的次数；`0` 表示还没有完整扫过一轮。
 
 `tried` 的作用是避免同一个 env 在未锁定前反复尝试同一个 chain id。若所有 chain id 都已经在 `tried`
 中，下一次 `pick_next()` 会清空 `tried`，`sweep_count += 1`，然后重新从推理优先级列表开头尝试。达到
