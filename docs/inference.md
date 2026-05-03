@@ -435,6 +435,14 @@ eval_data/
 注意：`asker_prompt_correct` 的 `null` 同时可能表示“三元判定中的 None”或“没有可统计预测”。需要结合
 `asker_prompt_prediction_count`、`asker_prompt_unknown_count` 一起区分。
 
+还需要注意：当前 `reasonable_prediction_chain_ids` 是由 `language_chain_id`、`ground_truth_chain_id`
+和抽象推理规则估计出来的，不是仿真直接记录到的真实 attempt chain。因此 `asker_prompt_correct=false`
+应优先视为“需要人工复核”的标记，而不是最终判定的 prompt 错误。例如某次 rollout 先按语言条件直接拉门，
+门被拉开一点后由于夹爪松开又关回去，随后模型按按钮并再次拉门成功；这种真实轨迹更接近
+`拉门 -> 按按钮 -> 拉门`，但自动推理可能仍只认为本轮 attempt 应是 `拉门`，从而把 asker 返回
+`按按钮 -> 拉门` 标为 `false`。在仿真能够稳定输出真实 attempt chain 之前，建议对所有自动
+`false` 样本查看视频或轨迹后再决定是否排除。
+
 #### 5.1.2 非自适应模式的视频文件
 
 非自适应模式下，每个 episode 结束后，视频按 env 自身成功判定移动到 `success/` 或 `failure/`：
@@ -658,7 +666,9 @@ stage。测试脚本 [tests/show_language_chain_reasoning_examples.py](../tests/
 4. 如果子序列检查通过，说明在“模型语言条件遵循能力足够”的假设下，本轮执行 `language_chain` 就能覆盖真实需求，因此 `attempt_chain = language_chain`。
 5. 如果子序列检查不通过，说明第一次按 `language_chain` 执行不足以完成真实任务；诊断模型认为之后会追加真实最小恢复链，因此 `attempt_chain = language_chain + ground_truth_chain`。
 
-这个函数只做抽象 chain 推理，不读取 `clock_wise`、几何状态或视频；它表达的是“在某个语言条件下，若真实状态属于某条最小链，理论上会观察到什么完整尝试序列”。
+这个函数只做抽象 chain 推理，不读取 `clock_wise`、几何状态或视频；它表达的是“在某个语言条件下（假设被严格遵循并且无失误），若真实状态属于某条最小链，理论上会观察到什么完整尝试序列”。
+如果假设不成立，比如真实 rollout 中出现夹爪松开、门回关、二次尝试等物理/控制细节，实际 attempt chain 可能比这个抽象推理结果更长。
+这些情况目前无法由该函数自动恢复，需要人工复核视频或后续接入更细粒度的轨迹事件检测。
 
 `infer_reasonable_prediction_chains(language_chain, ground_truth_chain=None, expanded_minimal_chains=None)` 的实现原理：
 
