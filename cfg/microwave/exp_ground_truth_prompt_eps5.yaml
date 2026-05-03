@@ -76,13 +76,14 @@ env:
   start_index: 80
   collectDataPath: microwave/0
   collectPC: false
-  collectRGBVideo: false
+  collectRGBVideo: true
   collectForce: true
   visualizePointcloud: false
   PointDownSampleNum: 2048
   rgbVideo:
     cameraType: fixed
-    cameraIds: []
+    cameraIds:
+    - 1
     fps: 10
     codec: libx264
     crf: 18
