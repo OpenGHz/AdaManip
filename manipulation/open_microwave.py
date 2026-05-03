@@ -229,6 +229,22 @@ class OpenMicroWaveManipulation(BaseManipulation) :
         episode_rates = [float(ep["success_rate"]) for ep in episodes]
         episode_elapsed = [float(ep["elapsed_sec"]) for ep in episodes]
         rollout_elapsed = [float(ep["rollout_elapsed_sec"]) for ep in episodes]
+        rollout_step_counts = [
+            int(ep["rollout_step_count"])
+            for ep in episodes
+            if ep.get("rollout_step_count") is not None
+        ]
+        completion_steps = [
+            int(ep["completion_step"])
+            for ep in episodes
+            if ep.get("completion_step") is not None
+        ]
+        env_success_steps = [
+            int(env_record["success_step"])
+            for ep in episodes
+            for env_record in ep.get("envs", [])
+            if env_record.get("success_step") is not None
+        ]
         total_trials = len(episodes) * num_envs
         total_successes = int(sum(int(ep["success_count"]) for ep in episodes))
 
@@ -249,6 +265,11 @@ class OpenMicroWaveManipulation(BaseManipulation) :
                 float(item["time_to_success_sec"])
                 for item in env_records
                 if item.get("time_to_success_sec") is not None
+            ]
+            success_steps = [
+                int(item["success_step"])
+                for item in env_records
+                if item.get("success_step") is not None
             ]
             asker_prompt_predictions = []
             for item in env_records:
@@ -297,6 +318,9 @@ class OpenMicroWaveManipulation(BaseManipulation) :
                 "mean_time_to_success_sec": float(np.mean(success_times)) if success_times else None,
                 "min_time_to_success_sec": float(np.min(success_times)) if success_times else None,
                 "max_time_to_success_sec": float(np.max(success_times)) if success_times else None,
+                "mean_success_step": float(np.mean(success_steps)) if success_steps else None,
+                "min_success_step": int(np.min(success_steps)) if success_steps else None,
+                "max_success_step": int(np.max(success_steps)) if success_steps else None,
                 "asker_prompt_prediction_count": asker_prompt_prediction_count,
                 "asker_prompt_correct_count": asker_prompt_correct_count,
                 "asker_prompt_unknown_count": asker_prompt_unknown_count,
@@ -307,7 +331,7 @@ class OpenMicroWaveManipulation(BaseManipulation) :
                     else None
                 ),
                 "asker_prompt_correct": (
-                    bool(last_asker_prediction["correct"])
+                    last_asker_prediction["correct"]
                     if last_asker_prediction is not None
                     else None
                 ),
@@ -345,6 +369,12 @@ class OpenMicroWaveManipulation(BaseManipulation) :
             "total_elapsed_sec": float(total_elapsed_sec),
             "mean_episode_elapsed_sec": float(np.mean(episode_elapsed)) if episode_elapsed else 0.0,
             "mean_rollout_elapsed_sec": float(np.mean(rollout_elapsed)) if rollout_elapsed else 0.0,
+            "mean_rollout_step_count": float(np.mean(rollout_step_counts)) if rollout_step_counts else 0.0,
+            "mean_episode_completion_step": float(np.mean(completion_steps)) if completion_steps else None,
+            "min_episode_completion_step": int(np.min(completion_steps)) if completion_steps else None,
+            "max_episode_completion_step": int(np.max(completion_steps)) if completion_steps else None,
+            "mean_env_success_step": float(np.mean(env_success_steps)) if env_success_steps else None,
+            "std_env_success_step": float(np.std(env_success_steps)) if env_success_steps else None,
             "asker_prompt_prediction_count": total_asker_prompt_predictions,
             "asker_prompt_correct_count": total_asker_prompt_correct,
             "asker_prompt_unknown_count": total_asker_prompt_unknown,
@@ -924,6 +954,8 @@ class OpenMicroWaveManipulation(BaseManipulation) :
             done_flag = [False] * self.env.num_envs
             success_step = [None] * self.env.num_envs
             time_to_success = [None] * self.env.num_envs
+            episode_completion_step = None
+            step = 0
             episode_results = None
             sampled_language_idx = None
             chain_ids = None
@@ -992,7 +1024,6 @@ class OpenMicroWaveManipulation(BaseManipulation) :
             )
 
             try:
-                step = 0
                 while step <= 32:
                     action = diffusion.infer_action_with_seg(
                         pcs_deque,
@@ -1026,6 +1057,8 @@ class OpenMicroWaveManipulation(BaseManipulation) :
                             time_to_success[env_id] = float(time.perf_counter() - episode_timer_start)
                             succ_cnt += 1
                             print(f"Env {env_id} Succeeded")
+                    if episode_completion_step is None and all(done_flag):
+                        episode_completion_step = int(step)
 
                 episode_results = ["success" if success else "failure" for success in done_flag]
             finally:
@@ -1042,6 +1075,7 @@ class OpenMicroWaveManipulation(BaseManipulation) :
                         self.video_recorder.finish_episode(episode_results)
 
             rollout_elapsed_sec = float(time.perf_counter() - episode_timer_start)
+            rollout_step_count = int(step)
 
             if adaptive_enable and episode_results is not None:
                 recategorize = []
@@ -1195,6 +1229,8 @@ class OpenMicroWaveManipulation(BaseManipulation) :
                     "success": bool(done_flag[env_id]),
                     "success_step": success_step[env_id],
                     "time_to_success_sec": time_to_success[env_id],
+                    "episode_completion_step": episode_completion_step,
+                    "episode_rollout_step_count": rollout_step_count,
                     "episode_elapsed_sec": episode_elapsed_sec,
                     "rollout_elapsed_sec": rollout_elapsed_sec,
                     "clock_wise": episode_clock_wise[env_id],
@@ -1219,6 +1255,8 @@ class OpenMicroWaveManipulation(BaseManipulation) :
                 "finished_at": time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime()),
                 "elapsed_sec": episode_elapsed_sec,
                 "rollout_elapsed_sec": rollout_elapsed_sec,
+                "rollout_step_count": rollout_step_count,
+                "completion_step": episode_completion_step,
                 "success_count": episode_success_count,
                 "num_envs": int(self.env.num_envs),
                 "success_rate": float(cur_rate),

@@ -365,10 +365,12 @@ eval_data/
 2. `started_at` / `finished_at`。
 3. `elapsed_sec`：该 episode 总耗时；自适应模式下包含 asker 调用和视频重分类耗时。
 4. `rollout_elapsed_sec`：只包含环境 rollout 和策略推理耗时，不包含 episode 后的 asker 处理。
-5. `success_count`、`num_envs`、`success_rate`。
-6. `sampled_language_id`：非自适应模式下本 episode 广播到所有 env 的 chain id。
-7. `per_env_language_ids`：自适应模式下每个 env 实际使用的 chain id。
-8. `envs`：该 episode 内每个 env 的明细。
+5. `rollout_step_count`：该 episode 实际执行的策略 action step 数；比 wall-clock 耗时更少受机器性能影响。
+6. `completion_step`：该 episode 中所有 env 第一次全部成功时的策略 action step；如果不是所有 env 都成功则为 `null`。
+7. `success_count`、`num_envs`、`success_rate`。
+8. `sampled_language_id`：非自适应模式下本 episode 广播到所有 env 的 chain id。
+9. `per_env_language_ids`：自适应模式下每个 env 实际使用的 chain id。
+10. `envs`：该 episode 内每个 env 的明细。
 
 `episodes[*].envs` 中每条 env 记录包含：
 
@@ -377,12 +379,13 @@ eval_data/
 3. `success`。
 4. `success_step`：第一次达到成功阈值时的闭环推理步数；失败时为 `null`。
 5. `time_to_success_sec`：从 episode 开始到该 env 首次成功的耗时；失败时为 `null`。
-6. `episode_elapsed_sec` / `rollout_elapsed_sec`：该 env 所在 episode 的总耗时和 rollout 耗时。
-7. `clock_wise`：该 env 本 episode 的机构锁定状态。
-8. `ground_truth_chain_id`：由当前 env 的真实机构状态得到的正确 chain id。microwave 任务中，`clock_wise=0` 时为 `0`（`拉门`），`clock_wise=1` 时为 `1`（`按按钮 -> 拉门`）。
-9. `final_open_dof`：episode 结束时门关节开度。
-10. `language_chain_id`：该 env 本 episode 实际使用的语言 chain id。
-11. `adaptive`：仅自适应模式下存在，记录 asker 是否跳过、asker 返回结果、锁定状态和尝试历史。
+6. `episode_completion_step` / `episode_rollout_step_count`：该 env 所在 episode 的全部成功 step 和总 rollout step。
+7. `episode_elapsed_sec` / `rollout_elapsed_sec`：该 env 所在 episode 的总耗时和 rollout 耗时。
+8. `clock_wise`：该 env 本 episode 的机构锁定状态。
+9. `ground_truth_chain_id`：由当前 env 的真实机构状态得到的正确 chain id。microwave 任务中，`clock_wise=0` 时为 `0`（`拉门`），`clock_wise=1` 时为 `1`（`按按钮 -> 拉门`）。
+10. `final_open_dof`：episode 结束时门关节开度。
+11. `language_chain_id`：该 env 本 episode 实际使用的语言 chain id。
+12. `adaptive`：仅自适应模式下存在，记录 asker 是否跳过、asker 返回结果、锁定状态和尝试历史。
 
 `adaptive` 字段包含：
 
@@ -412,25 +415,29 @@ eval_data/
 7. `total_elapsed_sec`。
 8. `mean_episode_elapsed_sec`。
 9. `mean_rollout_elapsed_sec`。
-10. `asker_prompt_prediction_count`：实际调用 asker 且返回了可识别 chain id 的预测次数。
-11. `asker_prompt_correct_count`：`asker_chain_id` 命中 `reasonable_prediction_chain_ids` 的次数。
-12. `asker_prompt_unknown_count`：`asker_chain_id` 未命中 reasonable 但严格等于 `ground_truth_chain_id` 的次数。
-13. `asker_prompt_incorrect_count`：`asker_chain_id` 既未命中 reasonable、也不严格等于 `ground_truth_chain_id` 的次数。
-14. `asker_prompt_accuracy`：整体 asker prompt 合理预测准确率，即 `asker_prompt_correct_count / asker_prompt_prediction_count`；没有可统计预测时为 `null`。
-15. `per_env`：每个 env 跨 episode 的汇总。
+10. `mean_rollout_step_count`：平均每个 episode 执行的策略 action step 数。
+11. `mean_episode_completion_step` / `min_episode_completion_step` / `max_episode_completion_step`：只统计所有 env 都成功的 episode；没有完整成功 episode 时为 `null`。
+12. `mean_env_success_step` / `std_env_success_step`：所有成功 env 的 `success_step` 均值和标准差；没有成功 env 时为 `null`。
+13. `asker_prompt_prediction_count`：实际调用 asker 且返回了可识别 chain id 的预测次数。
+14. `asker_prompt_correct_count`：`asker_chain_id` 命中 `reasonable_prediction_chain_ids` 的次数。
+15. `asker_prompt_unknown_count`：`asker_chain_id` 未命中 reasonable 但严格等于 `ground_truth_chain_id` 的次数。
+16. `asker_prompt_incorrect_count`：`asker_chain_id` 既未命中 reasonable、也不严格等于 `ground_truth_chain_id` 的次数。
+17. `asker_prompt_accuracy`：整体 asker prompt 合理预测准确率，即 `asker_prompt_correct_count / asker_prompt_prediction_count`；没有可统计预测时为 `null`。
+18. `per_env`：每个 env 跨 episode 的汇总。
 
-`overall.per_env[*]` 中除成功率和耗时字段外，还包含 asker prompt 正确性字段：
+`overall.per_env[*]` 中除成功率和耗时字段外，还包含 step 统计和 asker prompt 正确性字段：
 
-1. `asker_prompt_prediction_count`：该 env 实际调用 asker 且返回了可识别 chain id 的次数。
-2. `asker_prompt_correct_count`：该 env 中 `asker_chain_id` 命中 `reasonable_prediction_chain_ids` 的次数。
-3. `asker_prompt_unknown_count`：该 env 中 `asker_chain_id` 未命中 reasonable 但严格等于 `ground_truth_chain_id` 的次数。
-4. `asker_prompt_incorrect_count`：该 env 中 `asker_chain_id` 既未命中 reasonable、也不严格等于 `ground_truth_chain_id` 的次数。
-5. `asker_prompt_accuracy`：该 env 的 prompt 合理预测准确率；没有可统计预测时为 `null`。
-6. `asker_prompt_correct`：该 env 最近一次可统计 asker 预测的三元正确性；没有可统计预测时为 `null`。
-7. `last_asker_chain_id`：该 env 最近一次可统计 asker 预测的 chain id。
-8. `last_ground_truth_chain_id`：该 env 最近一次可统计预测对应的 ground-truth chain id。
-9. `last_reasonable_prediction_chain_ids`：该 env 最近一次可统计预测对应的合理 chain id 集合。
-10. `last_strict_ground_truth_correct`：该 env 最近一次可统计预测是否严格等于 ground truth，仅用于排查歧义场景。
+1. `mean_success_step` / `min_success_step` / `max_success_step`：该 env 成功 episode 的 step 统计；没有成功时为 `null`。
+2. `asker_prompt_prediction_count`：该 env 实际调用 asker 且返回了可识别 chain id 的次数。
+3. `asker_prompt_correct_count`：该 env 中 `asker_chain_id` 命中 `reasonable_prediction_chain_ids` 的次数。
+4. `asker_prompt_unknown_count`：该 env 中 `asker_chain_id` 未命中 reasonable 但严格等于 `ground_truth_chain_id` 的次数。
+5. `asker_prompt_incorrect_count`：该 env 中 `asker_chain_id` 既未命中 reasonable、也不严格等于 `ground_truth_chain_id` 的次数。
+6. `asker_prompt_accuracy`：该 env 的 prompt 合理预测准确率；没有可统计预测时为 `null`。
+7. `asker_prompt_correct`：该 env 最近一次可统计 asker 预测的三元正确性；没有可统计预测时为 `null`。
+8. `last_asker_chain_id`：该 env 最近一次可统计 asker 预测的 chain id。
+9. `last_ground_truth_chain_id`：该 env 最近一次可统计预测对应的 ground-truth chain id。
+10. `last_reasonable_prediction_chain_ids`：该 env 最近一次可统计预测对应的合理 chain id 集合。
+11. `last_strict_ground_truth_correct`：该 env 最近一次可统计预测是否严格等于 ground truth，仅用于排查歧义场景。
 
 注意：`asker_prompt_correct` 的 `null` 同时可能表示“三元判定中的 None”或“没有可统计预测”。需要结合
 `asker_prompt_prediction_count`、`asker_prompt_unknown_count` 一起区分。
