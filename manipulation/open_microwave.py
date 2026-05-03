@@ -1,6 +1,10 @@
 from manipulation.base_manipulation import BaseManipulation
 from envs.base_env import BaseEnv
 from manipulation.utils.transform import *
+from manipulation.language_chain_utils import (
+    rank_expanded_minimal_chain_ids,
+    score_language_chain_for_inference,
+)
 from logging import Logger
 import numpy as np
 import random
@@ -748,6 +752,7 @@ class OpenMicroWaveManipulation(BaseManipulation) :
         adaptive_camera_id = 0
         adaptive_rng = None
         adaptive_expanded_chains = None
+        adaptive_chain_priority_ids = None
         adaptive_dump_state = None
         # save_inference_data is independent of adaptive_language.enable: a pure
         # data-collection rollout (closed-loop Stage 2) wants the dump and skips
@@ -777,6 +782,20 @@ class OpenMicroWaveManipulation(BaseManipulation) :
             adaptive_asker = AdaptiveLanguageAsker(
                 asker_cfg, task_spec, expanded_minimal_chains
             )
+            adaptive_chain_priority_ids = rank_expanded_minimal_chain_ids(
+                expanded_minimal_chains
+            )
+            priority_parts = []
+            for chain_id in adaptive_chain_priority_ids:
+                chain = " -> ".join(expanded_minimal_chains[chain_id])
+                score = score_language_chain_for_inference(
+                    expanded_minimal_chains[chain_id],
+                    expanded_minimal_chains,
+                )
+                priority_parts.append(
+                    f"{chain_id}:{chain}|unique={score['unique_ground_truth_rate']:.2f}"
+                    f"|worst={int(score['worst_case_candidate_count'])}"
+                )
             adaptive_states = [
                 AdaptiveLanguageState(num_chains=int(language_embedding_bank.shape[0]))
                 for _ in range(self.env.num_envs)
@@ -788,6 +807,10 @@ class OpenMicroWaveManipulation(BaseManipulation) :
                 f"[adaptive] enabled: platform={asker_cfg.platform}, model={asker_cfg.model}, "
                 f"num_chains={int(language_embedding_bank.shape[0])}, "
                 f"num_envs={self.env.num_envs}, camera_id={adaptive_camera_id}"
+            )
+            print(
+                "[adaptive] chain inference priority: "
+                + ", ".join(priority_parts)
             )
         if adaptive_save_inference_data:
             if not self.cfg.get("env", {}).get("collectRGBVideo", False):
@@ -822,7 +845,10 @@ class OpenMicroWaveManipulation(BaseManipulation) :
                         chain_ids.append(s.locked_chain_id)
                         s.current_chain_id = s.locked_chain_id
                     else:
-                        cid = s.pick_next(adaptive_rng)
+                        cid = s.pick_next(
+                            adaptive_rng,
+                            priority_ids=adaptive_chain_priority_ids,
+                        )
                         s.current_chain_id = cid
                         s.tried_chain_ids.add(cid)
                         chain_ids.append(cid)

@@ -2,10 +2,11 @@
 
 Used by ``OpenMicroWaveManipulation.diffusion_evaluate`` when
 ``cfg.task.adaptive_language.enable`` is true. Each env in the eval batch holds
-its own ``AdaptiveLanguageState``: episode 1 samples a chain id at random and
+its own ``AdaptiveLanguageState``: each unlocked episode picks a chain id from
+the still-untried pool, optionally following a diagnostic priority order, and
 calls the asker; subsequent episodes freeze ``clock_wise`` and either reuse the
-locked chain id (if the asker confirmed success) or pick a new chain id from
-the still-untried pool. ``AdaptiveLanguageAsker`` wraps the
+locked chain id (if the asker confirmed success) or try the next chain.
+``AdaptiveLanguageAsker`` wraps the
 ``Video2Prompt`` / ``Video2PromptGroundTruth`` askers from ``try_to_remember``.
 """
 
@@ -34,19 +35,35 @@ class AdaptiveLanguageState:
     tried_chain_ids: set = field(default_factory=set)
     sweep_count: int = 0
 
-    def pick_next(self, rng: random.Random) -> int:
+    def pick_next(self, rng: random.Random, priority_ids: Optional[List[int]] = None) -> int:
         """Pick a chain id excluding the already-tried ones.
 
-        Resets ``tried_chain_ids`` and starts a new sweep when all ids have
-        already been tried.
+        When ``priority_ids`` is provided, the first still-untried id in that
+        order is returned. Resets ``tried_chain_ids`` and starts a new sweep
+        when all ids have already been tried.
         """
         if self.num_chains <= 0:
             raise ValueError("num_chains must be positive")
-        candidates = [i for i in range(self.num_chains) if i not in self.tried_chain_ids]
+        if priority_ids:
+            ordered_ids = []
+            seen = set()
+            for item in priority_ids:
+                chain_id = int(item)
+                if 0 <= chain_id < self.num_chains and chain_id not in seen:
+                    ordered_ids.append(chain_id)
+                    seen.add(chain_id)
+            if len(ordered_ids) != self.num_chains:
+                ordered_ids.extend(i for i in range(self.num_chains) if i not in seen)
+        else:
+            ordered_ids = list(range(self.num_chains))
+
+        candidates = [i for i in ordered_ids if i not in self.tried_chain_ids]
         if not candidates:
             self.tried_chain_ids = set()
             self.sweep_count += 1
-            candidates = list(range(self.num_chains))
+            candidates = ordered_ids
+        if priority_ids:
+            return candidates[0]
         return rng.choice(candidates)
 
 

@@ -577,14 +577,14 @@ eval_microwave_model.sh
 `env.reset(clock_same=False)` 让每个 env 重新随机化 `clock_wise`，因此「同一个 env 在哪种语言条件
 下能稳定打开微波炉」这条信息无法跨 episode 复用。
 
-自适应模式开启后，每个 env 跨 episode 维护一份独立的状态机：第一次 episode 像今天一样随机抽样
-`clock_wise` 与 chain id，并把当次 RGB 视频 + 实时 10 维 action 轨迹送进 asker 判定 `(success,
-chain_id)`。从第二个 episode 起：
+自适应模式开启后，每个 env 跨 episode 维护一份独立的状态机：第一次 episode 仍随机抽样
+`clock_wise`，但 chain id 不再随机，而是优先选择最有助于推断真实环境状态的语言条件，并把当次 RGB
+视频 + 实时 10 维 action 轨迹送进 asker 判定 `(success, chain_id)`。从第二个 episode 起：
 
 - 该 env 的 `clock_wise` 被冻结为 episode 1 的值；
 - 若 asker 此前判定成功并返回了一个 chain id，则锁定该 id，后续不再调用 asker；
-- 若仍未锁定，从 chain id 全集中排除已尝试过的 id 抽取下一个；当全部尝试过仍未成功时，重置已尝试集合
-  并重新从全集抽样。
+- 若仍未锁定，从推理优先级列表中选择下一个尚未尝试过的 id；当全部尝试过仍未成功时，重置已尝试集合
+  并从优先级列表开头重新尝试。
 
 整个流程的目的是评估：在 asker 给出最优语言条件后，对同一 env 状态后续任务能否更快、更稳定地完成。
 
@@ -630,6 +630,37 @@ task:
 
 ### 8.3 状态机与每条 episode 的执行
 
+chain 的推理优先级由 [manipulation/language_chain_utils.py](../manipulation/language_chain_utils.py)
+中的通用函数计算，不包含 microwave 专用判断。函数输入应是已经展开后的 `expanded_minimal_chains`；
+也就是说，`language_template.json` 里的抽象 `Nx...` 需要先在数据侧展开为 `1x...`、`2x...` 等具体
+stage。测试脚本 [tests/show_language_chain_reasoning_examples.py](../tests/show_language_chain_reasoning_examples.py)
+会为 `Nx` 任务构造少量示例展开，方便人工检查。
+
+`infer_attempt_chain(language_chain, ground_truth_chain)` 的实现原理：
+
+1. 先对输入 chain 做规范化，去掉空 stage，并保留原始 stage 文本作为最终输出形式。
+2. 为了判断“某个语言条件是否已经覆盖真实最小链”，会临时把具体重复 stage 展开到原子操作层面，例如 `2x旋转瓶盖` 会展开为 `["旋转瓶盖", "旋转瓶盖"]`。
+3. 在原子操作层面检查 `ground_truth_chain` 是否是 `language_chain` 的有序子序列。这里使用子序列而不是前缀，是因为更长的语言条件可能包含真实最小链需要的所有动作；相反方向的动作名不同，例如 `顺时针旋转` 和 `逆时针旋转`，不会被误判为相同操作。
+4. 如果子序列检查通过，说明在“模型语言条件遵循能力足够”的假设下，本轮执行 `language_chain` 就能覆盖真实需求，因此 `attempt_chain = language_chain`。
+5. 如果子序列检查不通过，说明第一次按 `language_chain` 执行不足以完成真实任务；诊断模型认为之后会追加真实最小恢复链，因此 `attempt_chain = language_chain + ground_truth_chain`。
+
+这个函数只做抽象 chain 推理，不读取 `clock_wise`、几何状态或视频；它表达的是“在某个语言条件下，若真实状态属于某条最小链，理论上会观察到什么完整尝试序列”。
+
+`rank_expanded_minimal_chain_ids(expanded_minimal_chains)` / `sort_expanded_minimal_chains_by_inference_priority(expanded_minimal_chains)` 的实现原理：
+
+1. 把每一条 `expanded_minimal_chains[i]` 轮流当作候选 `language_chain`。
+2. 对所有可能的 `ground_truth_chain` 枚举调用 `infer_attempt_chain(language_chain, ground_truth_chain)`。
+3. 按得到的 `attempt_chain` 分组：同一个 `attempt_chain` 下可能对应多个 ground-truth chain id。若某个分组只有一个 id，说明只要观察到该 attempt，就能唯一反推出真实状态。
+4. 对每个候选 `language_chain` 计算信息量指标：
+   - `unique_ground_truth_count/rate`：能被唯一识别的 ground-truth 数量/比例，越大越好。
+   - `worst_case_candidate_count`：最坏情况下同一个 attempt 还剩多少个候选 ground-truth，越小越好。
+   - `expected_candidate_count`：按 ground-truth 均匀先验加权后的平均候选数，越小越好。
+   - `distinct_attempt_count`：这个 language chain 能产生多少种不同 attempt，越多通常越有区分度。
+   - `mean_attempt_atomic_length` 和 `language_atomic_length`：作为次级代价项，避免在信息量相同时优先选择明显更长的尝试。
+5. 排序 key 固定为：先最大化 `unique_ground_truth_count`，再最小化 `worst_case_candidate_count`，再最小化 `expected_candidate_count`，再最大化 `distinct_attempt_count`，最后依次用 `mean_attempt_atomic_length`、`language_atomic_length` 和原始 chain id 做稳定排序。
+
+因此 microwave 中 `["拉门"]` 会排在 `["按按钮", "拉门"]` 前面：前者在锁住时会形成 `["拉门", "按按钮", "拉门"]`，能区分锁住/未锁；后者无论锁住与否都可能只看到 `["按按钮", "拉门"]`，无法唯一判断锁状态。
+
 每个 env 在 manipulation 上对应一个 `AdaptiveLanguageState`（在
 [manipulation/adaptive_language_asker.py](../manipulation/adaptive_language_asker.py)）：
 
@@ -646,7 +677,7 @@ sweep_count         : int   # 已经清空过几轮；超过 max_retry_rounds �
 episode k 流程（每个 env 独立判断）：
   if locked_chain_id is not None:           reuse, skip asker
   else:
-      cid = pick_next(rng)                  # excludes tried_chain_ids; resets if exhausted
+      cid = pick_next(priority_ids)         # excludes tried_chain_ids; resets if exhausted
       tried_chain_ids.add(cid)
       run rollout, capture video + 10D actions
       success, asker_cid = asker.ask(...)
@@ -666,22 +697,50 @@ reset 路径：
 
 ### 8.4 自适应日志解释
 
+自适应初始化时会打印 chain 的推理优先级：
+
+```text
+[adaptive] chain inference priority: 0:拉门|unique=1.00|worst=1, 1:按按钮 -> 拉门|unique=0.00|worst=2
+```
+
+这里 `unique` 表示如果第一个 episode 使用该 chain，有多少比例的可能 ground-truth 能从观测到的
+`attempt_chain` 中唯一确定；`worst` 表示最坏情况下还剩多少个候选 ground-truth。数值越好，该 chain
+越优先尝试。实际打印内容会随 `expanded_minimal_chains` 改变。
+
 每个 episode 开始时会打印本轮每个 env 实际使用的 chain id：
 
 ```text
-[adaptive] eps 1 chain ids per env: env0=T1, env1=T1, env2=T0, ...
+[adaptive] eps 1 chain ids per env: env0=T0, env1=T0, env2=T0, ...
 ```
 
 含义：
 
 1. `eps 1`：当前是第 1 个 episode。
-2. `env0=T1`：env 0 本轮使用 chain id `1`。
+2. `env0=T0`：env 0 本轮使用 chain id `0`。
 3. `T` 表示 trial / try，即该 env 还没有锁定 prompt，本轮是一次新尝试；本轮结束后会调用 asker 判断是否要锁定。
 4. `L` 表示 locked，即该 env 之前已经锁定 prompt，本轮直接复用锁定的 chain id，并跳过 asker。
 
 例如 `env2=T0` 表示 env 2 当前还未锁定，本轮尝试 chain id `0`；`env4=L1` 表示 env 4 已锁定，继续使用 chain id `1`。
 
 当某个 env 本轮需要调用 asker 时，episode 结束后会打印：
+
+```text
+[adaptive] eps 1 env 0 done_flag=True asker_success=True asker_chain_id=0 ground_truth_chain_id=1 current_chain_id=0 tried=[0] sweep=0
+```
+
+字段含义：
+
+1. `done_flag=True`：按环境自身成功阈值判断，该 env 本轮成功打开门。
+2. `asker_success=True`：asker 认为本轮视频/轨迹能够得到一个可用 prompt。
+3. `asker_chain_id=0`：asker 根据本轮视频/轨迹返回的 chain id。
+4. `ground_truth_chain_id=1`：由当前 env 的真实机构状态得到的正确 chain id。microwave 任务中，`clock_wise=0` 时为 `0`（`拉门`），`clock_wise=1` 时为 `1`（`按按钮 -> 拉门`）。
+5. `current_chain_id=0`：本轮 rollout 实际输入策略的 chain id。它可能与 `asker_chain_id` 不同，因为 `current_chain_id` 是本轮先尝试的 prompt，而 `asker_chain_id` 是事后根据轨迹推断出的正确 prompt。
+6. `tried=[0]`：该 env 当前 sweep 中已经尝试过、但在本轮开始前尚未锁定的 chain id 集合。这里表示 env 0 已经尝试过 chain id `0`。
+7. `sweep=0`：该 env 已经把所有 chain id 尝试完并重置 `tried` 的次数；`0` 表示还没有完整扫过一轮。
+
+`tried` 的作用是避免同一个 env 在未锁定前反复尝试同一个 chain id。若所有 chain id 都已经在 `tried`
+中，下一次 `pick_next()` 会清空 `tried`，`sweep_count += 1`，然后重新从推理优先级列表开头尝试。达到
+`max_retry_rounds` 后会强制锁定 fallback chain，避免无限循环。
 
 ### 8.5 输出与视频目录布局
 
