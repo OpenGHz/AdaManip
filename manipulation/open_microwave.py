@@ -2,6 +2,7 @@ from manipulation.base_manipulation import BaseManipulation
 from envs.base_env import BaseEnv
 from manipulation.utils.transform import *
 from manipulation.language_chain_utils import (
+    infer_reasonable_prediction_chains,
     rank_expanded_minimal_chain_ids,
     score_language_chain_for_inference,
 )
@@ -215,7 +216,14 @@ class OpenMicroWaveManipulation(BaseManipulation) :
             yaml.safe_dump(serializable_cfg, f, allow_unicode=True, sort_keys=False)
         return target_path
 
-    def _update_eval_metrics_summary(self, metrics, total_elapsed_sec, status, num_envs):
+    def _update_eval_metrics_summary(
+        self,
+        metrics,
+        total_elapsed_sec,
+        status,
+        num_envs,
+        expanded_minimal_chains=None,
+    ):
         episodes = metrics.get("episodes", [])
         num_envs = int(num_envs)
         episode_rates = [float(ep["success_rate"]) for ep in episodes]
@@ -249,11 +257,20 @@ class OpenMicroWaveManipulation(BaseManipulation) :
                 ground_truth_chain_id = item.get("ground_truth_chain_id")
                 if asker_chain_id is None or ground_truth_chain_id is None:
                     continue
+                language_chain_id = item.get("language_chain_id")
+                reasonable_prediction_chain_ids = self._reasonable_prediction_chain_ids(
+                    language_chain_id,
+                    ground_truth_chain_id,
+                    expanded_minimal_chains,
+                )
+                strict_ground_truth_correct = int(asker_chain_id) == int(ground_truth_chain_id)
                 asker_prompt_predictions.append({
                     "episode_id": int(item.get("episode_id", -1)) if "episode_id" in item else None,
                     "asker_chain_id": int(asker_chain_id),
                     "ground_truth_chain_id": int(ground_truth_chain_id),
-                    "correct": int(asker_chain_id) == int(ground_truth_chain_id),
+                    "reasonable_prediction_chain_ids": reasonable_prediction_chain_ids,
+                    "strict_ground_truth_correct": strict_ground_truth_correct,
+                    "correct": int(asker_chain_id) in reasonable_prediction_chain_ids,
                 })
             asker_prompt_correct_count = int(sum(1 for item in asker_prompt_predictions if item["correct"]))
             asker_prompt_prediction_count = len(asker_prompt_predictions)
@@ -288,6 +305,16 @@ class OpenMicroWaveManipulation(BaseManipulation) :
                 ),
                 "last_ground_truth_chain_id": (
                     last_asker_prediction["ground_truth_chain_id"]
+                    if last_asker_prediction is not None
+                    else None
+                ),
+                "last_reasonable_prediction_chain_ids": (
+                    last_asker_prediction["reasonable_prediction_chain_ids"]
+                    if last_asker_prediction is not None
+                    else None
+                ),
+                "last_strict_ground_truth_correct": (
+                    bool(last_asker_prediction["strict_ground_truth_correct"])
                     if last_asker_prediction is not None
                     else None
                 ),
@@ -405,6 +432,38 @@ class OpenMicroWaveManipulation(BaseManipulation) :
 
     def _microwave_ground_truth_chain_id(self, clock_wise):
         return 1 if int(round(float(clock_wise))) == 1 else 0
+
+    def _reasonable_prediction_chain_ids(
+        self,
+        language_chain_id,
+        ground_truth_chain_id,
+        expanded_minimal_chains,
+    ):
+        if (
+            expanded_minimal_chains is None
+            or language_chain_id is None
+            or not (0 <= int(language_chain_id) < len(expanded_minimal_chains))
+        ):
+            return [int(ground_truth_chain_id)] if ground_truth_chain_id is not None else []
+
+        ground_truth_chain = None
+        if (
+            ground_truth_chain_id is not None
+            and 0 <= int(ground_truth_chain_id) < len(expanded_minimal_chains)
+        ):
+            ground_truth_chain = expanded_minimal_chains[int(ground_truth_chain_id)]
+
+        reasonable_chains = infer_reasonable_prediction_chains(
+            expanded_minimal_chains[int(language_chain_id)],
+            ground_truth_chain=ground_truth_chain,
+            expanded_minimal_chains=expanded_minimal_chains,
+        )
+        reasonable_keys = {tuple(chain) for chain in reasonable_chains}
+        return [
+            int(chain_id)
+            for chain_id, chain in enumerate(expanded_minimal_chains)
+            if tuple(chain) in reasonable_keys
+        ]
 
     def _select_language_embedding_per_env(self, embedding_bank, chain_ids):
         """Build a (num_envs, embed_dim) tensor from a per-env list of chain ids."""
@@ -983,10 +1042,16 @@ class OpenMicroWaveManipulation(BaseManipulation) :
                     ground_truth_chain_id = self._microwave_ground_truth_chain_id(
                         episode_clock_wise[env_id]
                     )
+                    reasonable_prediction_chain_ids = self._reasonable_prediction_chain_ids(
+                        s.current_chain_id,
+                        ground_truth_chain_id,
+                        adaptive_expanded_chains,
+                    )
                     print(
                         f"[adaptive] eps {eps + 1} env {env_id} done_flag={done_flag[env_id]} "
                         f"asker_success={asker_success} asker_chain_id={asker_chain_id} "
                         f"ground_truth_chain_id={ground_truth_chain_id} "
+                        f"reasonable_prediction_chain_ids={reasonable_prediction_chain_ids} "
                         f"current_chain_id={s.current_chain_id} tried={sorted(s.tried_chain_ids)} "
                         f"sweep={s.sweep_count}"
                     )
@@ -1012,6 +1077,17 @@ class OpenMicroWaveManipulation(BaseManipulation) :
                         "asker_success": bool(asker_success),
                         "asker_chain_id": int(asker_chain_id) if asker_chain_id is not None else None,
                         "ground_truth_chain_id": int(ground_truth_chain_id),
+                        "reasonable_prediction_chain_ids": reasonable_prediction_chain_ids,
+                        "asker_reasonable_prediction_correct": (
+                            int(asker_chain_id) in reasonable_prediction_chain_ids
+                            if asker_chain_id is not None
+                            else None
+                        ),
+                        "asker_strict_ground_truth_correct": (
+                            int(asker_chain_id) == int(ground_truth_chain_id)
+                            if asker_chain_id is not None
+                            else None
+                        ),
                         "current_chain_id": int(s.current_chain_id) if s.current_chain_id is not None else None,
                         "locked_chain_id": int(s.locked_chain_id) if s.locked_chain_id is not None else None,
                         "tried_chain_ids": sorted(int(item) for item in s.tried_chain_ids),
@@ -1117,6 +1193,7 @@ class OpenMicroWaveManipulation(BaseManipulation) :
                 total_elapsed_sec=time.perf_counter() - eval_timer_start,
                 status="running",
                 num_envs=self.env.num_envs,
+                expanded_minimal_chains=adaptive_expanded_chains,
             )
             self._write_eval_metrics(eval_save_dir, eval_metrics)
 
@@ -1139,6 +1216,7 @@ class OpenMicroWaveManipulation(BaseManipulation) :
             total_elapsed_sec=time.perf_counter() - eval_timer_start,
             status="completed",
             num_envs=self.env.num_envs,
+            expanded_minimal_chains=adaptive_expanded_chains,
         )
         self._write_eval_metrics(eval_save_dir, eval_metrics)
         print(f"Saved eval metrics: {(Path(eval_save_dir) / 'eval_metrics.json').absolute()}")

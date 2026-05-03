@@ -390,11 +390,15 @@ eval_data/
 2. `reason`：跳过原因；当前主要为 `already_locked`。仅 `skipped=true` 时存在。
 3. `asker_success`：asker 是否认为本次视频/轨迹成功得到可用 prompt。仅实际调用 asker 时存在。
 4. `asker_chain_id`：asker 返回的 chain id；当 asker 失败或未返回可识别 chain 时为 `null`。
-5. `current_chain_id`：本 episode rollout 时实际输入策略的 chain id。
-6. `locked_chain_id`：该 env 当前已经锁定、后续 episode 会复用的 chain id；尚未锁定时为 `null`。
-7. `tried_chain_ids`：该 env 当前 sweep 中已经尝试过的 chain id 列表。
-8. `sweep_count`：chain id 全部尝试后重置 `tried_chain_ids` 的次数；达到 `max_retry_rounds` 后会强制锁定 fallback chain。
-9. `video_path`：传给 asker 的视频路径；未启用视频、文件不存在或跳过 asker 时可能为 `null` 或不存在。
+5. `ground_truth_chain_id`：该 env 本轮真实机构状态对应的 chain id。
+6. `reasonable_prediction_chain_ids`：基于本轮 `language_chain_id` 和可观察 `attempt_chain`，asker 可以合理返回的 chain id 集合。
+7. `asker_reasonable_prediction_correct`：`asker_chain_id` 是否落在 `reasonable_prediction_chain_ids` 中。
+8. `asker_strict_ground_truth_correct`：`asker_chain_id == ground_truth_chain_id`，仅用于辅助诊断，不再作为主准确率口径。
+9. `current_chain_id`：本 episode rollout 时实际输入策略的 chain id。
+10. `locked_chain_id`：该 env 当前已经锁定、后续 episode 会复用的 chain id；尚未锁定时为 `null`。
+11. `tried_chain_ids`：该 env 当前 sweep 中已经尝试过的 chain id 列表。
+12. `sweep_count`：chain id 全部尝试后重置 `tried_chain_ids` 的次数；达到 `max_retry_rounds` 后会强制锁定 fallback chain。
+13. `video_path`：传给 asker 的视频路径；未启用视频、文件不存在或跳过 asker 时可能为 `null` 或不存在。
 
 `overall` 是整体汇总：
 
@@ -408,18 +412,20 @@ eval_data/
 8. `mean_episode_elapsed_sec`。
 9. `mean_rollout_elapsed_sec`。
 10. `asker_prompt_prediction_count`：实际调用 asker 且返回了可识别 chain id 的预测次数。
-11. `asker_prompt_correct_count`：`asker_chain_id == ground_truth_chain_id` 的次数。
-12. `asker_prompt_accuracy`：整体 asker prompt 准确率，即 `asker_prompt_correct_count / asker_prompt_prediction_count`；没有可统计预测时为 `null`。
+11. `asker_prompt_correct_count`：`asker_chain_id` 命中 `reasonable_prediction_chain_ids` 的次数。
+12. `asker_prompt_accuracy`：整体 asker prompt 合理预测准确率，即 `asker_prompt_correct_count / asker_prompt_prediction_count`；没有可统计预测时为 `null`。
 13. `per_env`：每个 env 跨 episode 的汇总。
 
 `overall.per_env[*]` 中除成功率和耗时字段外，还包含 asker prompt 正确性字段：
 
 1. `asker_prompt_prediction_count`：该 env 实际调用 asker 且返回了可识别 chain id 的次数。
-2. `asker_prompt_correct_count`：该 env 中 `asker_chain_id == ground_truth_chain_id` 的次数。
+2. `asker_prompt_correct_count`：该 env 中 `asker_chain_id` 命中 `reasonable_prediction_chain_ids` 的次数。
 3. `asker_prompt_accuracy`：该 env 的 prompt 预测准确率；没有可统计预测时为 `null`。
 4. `asker_prompt_correct`：该 env 最近一次可统计 asker 预测是否正确；没有可统计预测时为 `null`。
 5. `last_asker_chain_id`：该 env 最近一次可统计 asker 预测的 chain id。
 6. `last_ground_truth_chain_id`：该 env 最近一次可统计预测对应的 ground-truth chain id。
+7. `last_reasonable_prediction_chain_ids`：该 env 最近一次可统计预测对应的合理 chain id 集合。
+8. `last_strict_ground_truth_correct`：该 env 最近一次可统计预测是否严格等于 ground truth，仅用于排查歧义场景。
 
 #### 5.1.2 非自适应模式的视频文件
 
@@ -646,6 +652,19 @@ stage。测试脚本 [tests/show_language_chain_reasoning_examples.py](../tests/
 
 这个函数只做抽象 chain 推理，不读取 `clock_wise`、几何状态或视频；它表达的是“在某个语言条件下，若真实状态属于某条最小链，理论上会观察到什么完整尝试序列”。
 
+`infer_reasonable_prediction_chains(language_chain, ground_truth_chain=None, expanded_minimal_chains=None)` 的实现原理：
+
+1. 如果提供了 `ground_truth_chain`，就只针对这一个真实状态计算 `observed_attempt`。
+2. 如果没有提供 `ground_truth_chain`，必须提供 `expanded_minimal_chains`；函数会把每条候选 chain 都当作一种可能 ground truth，逐个调用 `infer_attempt_chain(language_chain, candidate_chain)`，得到所有可能发生的 attempt。
+3. 这个函数的目标不是枚举所有隐藏 ground-truth 状态，而是枚举 asker 只根据本轮实际表现可以合理返回的 chain。
+4. 对每个可能 ground truth，若 `language_chain` 已经覆盖它，实际表现就是按 `language_chain` 完成任务，因此 `language_chain` 是合理预测。
+5. 对每个可能 ground truth，若 `language_chain` 不能覆盖它，说明第一次尝试失败后需要执行真实恢复链，因此该 ground-truth chain 是合理预测。
+6. 如果完整 `observed_attempt` 本身也是 `expanded_minimal_chains` 里的合法候选 chain，则把完整 `observed_attempt` 也加入合理预测集合。当前模板中这通常只是和上面的预测重复，但这样可以兼容未来更复杂的任务模板。
+
+例如 `language_chain=["按按钮","拉门"]`、`ground_truth_chain=["拉门"]` 时，`observed_attempt=["按按钮","拉门"]`。虽然隐藏状态可能是“未锁”或“需要按按钮解锁”，但 asker 只能看到确实执行了 `["按按钮","拉门"]`，因此它返回 `["按按钮","拉门"]` 是合理的，即使它不严格等于真实 `ground_truth_chain`。
+
+如果没有提供 ground truth，而只知道 `language_chain=["拉门"]`，则必须结合 microwave 的候选全集枚举：当 ground truth 为 `["拉门"]` 时可能看到 `["拉门"]`；当 ground truth 为 `["按按钮","拉门"]` 时可能看到 `["拉门","按按钮","拉门"]`。因此合理预测集合为 `["拉门"]` 和 `["按按钮","拉门"]`。
+
 `rank_expanded_minimal_chain_ids(expanded_minimal_chains)` / `sort_expanded_minimal_chains_by_inference_priority(expanded_minimal_chains)` 的实现原理：
 
 1. 把每一条 `expanded_minimal_chains[i]` 轮流当作候选 `language_chain`。
@@ -725,7 +744,7 @@ reset 路径：
 当某个 env 本轮需要调用 asker 时，episode 结束后会打印：
 
 ```text
-[adaptive] eps 1 env 0 done_flag=True asker_success=True asker_chain_id=0 ground_truth_chain_id=1 current_chain_id=0 tried=[0] sweep=0
+[adaptive] eps 1 env 0 done_flag=True asker_success=True asker_chain_id=0 ground_truth_chain_id=1 reasonable_prediction_chain_ids=[1] current_chain_id=0 tried=[0] sweep=0
 ```
 
 字段含义：
@@ -734,9 +753,10 @@ reset 路径：
 2. `asker_success=True`：asker 认为本轮视频/轨迹能够得到一个可用 prompt。
 3. `asker_chain_id=0`：asker 根据本轮视频/轨迹返回的 chain id。
 4. `ground_truth_chain_id=1`：由当前 env 的真实机构状态得到的正确 chain id。microwave 任务中，`clock_wise=0` 时为 `0`（`拉门`），`clock_wise=1` 时为 `1`（`按按钮 -> 拉门`）。
-5. `current_chain_id=0`：本轮 rollout 实际输入策略的 chain id。它可能与 `asker_chain_id` 不同，因为 `current_chain_id` 是本轮先尝试的 prompt，而 `asker_chain_id` 是事后根据轨迹推断出的正确 prompt。
-6. `tried=[0]`：该 env 当前 sweep 中已经尝试过、但在本轮开始前尚未锁定的 chain id 集合。这里表示 env 0 已经尝试过 chain id `0`。
-7. `sweep=0`：该 env 已经把所有 chain id 尝试完并重置 `tried` 的次数；`0` 表示还没有完整扫过一轮。
+5. `reasonable_prediction_chain_ids=[1]`：基于本轮可观察到的 `attempt_chain`，asker 可以合理返回的 chain id 集合。主准确率口径使用 `asker_chain_id in reasonable_prediction_chain_ids`。
+6. `current_chain_id=0`：本轮 rollout 实际输入策略的 chain id。它可能与 `asker_chain_id` 不同，因为 `current_chain_id` 是本轮先尝试的 prompt，而 `asker_chain_id` 是事后根据轨迹推断出的正确 prompt。
+7. `tried=[0]`：该 env 当前 sweep 中已经尝试过、但在本轮开始前尚未锁定的 chain id 集合。这里表示 env 0 已经尝试过 chain id `0`。
+8. `sweep=0`：该 env 已经把所有 chain id 尝试完并重置 `tried` 的次数；`0` 表示还没有完整扫过一轮。
 
 `tried` 的作用是避免同一个 env 在未锁定前反复尝试同一个 chain id。若所有 chain id 都已经在 `tried`
 中，下一次 `pick_next()` 会清空 `tried`，`sweep_count += 1`，然后重新从推理优先级列表开头尝试。达到

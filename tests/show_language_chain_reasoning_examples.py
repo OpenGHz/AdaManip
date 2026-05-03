@@ -6,7 +6,8 @@ cfg/language_template.json, builds small example expanded_minimal_chains for
 each task, then prints:
 
 1. infer_attempt_chain(language_chain, ground_truth_chain) for every pair.
-2. sort_expanded_minimal_chains_by_inference_priority(expanded_minimal_chains).
+2. infer_reasonable_prediction_chains(...) for every pair.
+3. sort_expanded_minimal_chains_by_inference_priority(expanded_minimal_chains).
 """
 
 from __future__ import annotations
@@ -26,6 +27,7 @@ if str(ADA_MANIP_ROOT) not in sys.path:
 
 from manipulation.language_chain_utils import (  # noqa: E402
     infer_attempt_chain,
+    infer_reasonable_prediction_chains,
     rank_expanded_minimal_chain_ids,
     score_language_chain_for_inference,
     sort_expanded_minimal_chains_by_inference_priority,
@@ -113,15 +115,43 @@ def print_task_examples(task_name: str, task_spec: dict, max_repeat: int) -> Non
     print(f"rank ids: {ranked_ids}")
     print()
 
-    print("infer_attempt_chain(language_chain, ground_truth_chain):")
+    print("infer_attempt_chain + infer_reasonable_prediction_chains:")
     for language_id, language_chain in enumerate(expanded_chains):
         for ground_truth_id, ground_truth_chain in enumerate(expanded_chains):
             attempt_chain = infer_attempt_chain(language_chain, ground_truth_chain)
+            reasonable_chains = infer_reasonable_prediction_chains(
+                language_chain,
+                ground_truth_chain=ground_truth_chain,
+                expanded_minimal_chains=expanded_chains,
+            )
             print(
                 f"  L{language_id} + GT{ground_truth_id}: "
                 f"{format_chain(language_chain)}  +  {format_chain(ground_truth_chain)}"
             )
             print(f"    => {format_chain(attempt_chain)}")
+            print(
+                "    reasonable predictions: "
+                + ", ".join(format_chain(chain) for chain in reasonable_chains)
+            )
+    print()
+
+    print("infer_reasonable_prediction_chains without ground_truth_chain:")
+    for language_id, language_chain in enumerate(expanded_chains):
+        possible_attempts = [
+            f"GT{ground_truth_id}=>{format_chain(infer_attempt_chain(language_chain, ground_truth_chain))}"
+            for ground_truth_id, ground_truth_chain in enumerate(expanded_chains)
+        ]
+        reasonable_chains = infer_reasonable_prediction_chains(
+            language_chain,
+            ground_truth_chain=None,
+            expanded_minimal_chains=expanded_chains,
+        )
+        print(f"  L{language_id}: {format_chain(language_chain)}")
+        print("    possible attempts: " + "; ".join(possible_attempts))
+        print(
+            "    reasonable predictions: "
+            + ", ".join(format_chain(chain) for chain in reasonable_chains)
+        )
     print()
 
 

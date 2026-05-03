@@ -98,6 +98,76 @@ def build_attempt_partitions(
     return partitions
 
 
+def infer_reasonable_prediction_chains(
+    language_chain: Iterable[str],
+    ground_truth_chain: Iterable[str] | None = None,
+    expanded_minimal_chains: Sequence[Iterable[str]] | None = None,
+) -> List[List[str]]:
+    """Return chain predictions that are reasonable from the observed behavior.
+
+    The result is about what an asker can reasonably report from the actual
+    performed steps, not about all hidden ground-truth states compatible with the
+    observation. This handles ambiguous cases such as:
+
+    - language = ["按按钮", "拉门"]
+    - ground truth = ["拉门"] or unknown
+    - observed attempt = ["按按钮", "拉门"]
+
+    The hidden ground truth may be either ["拉门"] or ["按按钮", "拉门"], but an
+    asker that only sees the actual behavior can reasonably report
+    ["按按钮", "拉门"].
+
+    When ``ground_truth_chain`` is omitted, ``expanded_minimal_chains`` is
+    required so every possible ground-truth chain can be enumerated.
+    """
+
+    language_chain = normalize_chain(language_chain)
+    expanded_keys = set()
+    if expanded_minimal_chains is not None:
+        expanded_keys = {
+            tuple(normalize_chain(chain))
+            for chain in expanded_minimal_chains
+        }
+
+    if ground_truth_chain is None:
+        if expanded_minimal_chains is None:
+            raise ValueError(
+                "expanded_minimal_chains is required when ground_truth_chain is None"
+            )
+        candidate_ground_truth_chains = [
+            normalize_chain(chain)
+            for chain in expanded_minimal_chains
+        ]
+    else:
+        candidate_ground_truth_chains = [normalize_chain(ground_truth_chain)]
+
+    reasonable_chains = []
+    for normalized_gt_chain in candidate_ground_truth_chains:
+        observed_attempt = infer_attempt_chain(language_chain, normalized_gt_chain)
+        predicted_chain = (
+            language_chain
+            if chain_satisfies_ground_truth(language_chain, normalized_gt_chain)
+            else normalized_gt_chain
+        )
+        reasonable_chains.append(predicted_chain)
+        # If the full observed attempt itself is one of the known command chains,
+        # keep it as an additional reasonable prediction. For the current templates
+        # this normally only duplicates predicted_chain, but it preserves the generic
+        # behavior for future task templates.
+        if tuple(observed_attempt) in expanded_keys:
+            reasonable_chains.append(observed_attempt)
+
+    deduped = []
+    seen = set()
+    for chain in reasonable_chains:
+        key = tuple(chain)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(chain)
+    return deduped
+
+
 def score_language_chain_for_inference(
     language_chain: Iterable[str],
     expanded_minimal_chains: Sequence[Iterable[str]],
