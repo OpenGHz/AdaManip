@@ -10,6 +10,11 @@ import collections
 
 class OpenDoorManipulation(BaseManipulation) :
 
+    # clock_wise=1 (CW dof setup in env) → chain 0 (顺时针旋转把手 -> 拉开门)
+    # clock_wise=0 (CCW dof setup) → chain 1 (逆时针旋转把手 -> 拉开门)
+    _CHAIN_CW: List[str] = ["顺时针旋转把手", "拉开门"]
+    _CHAIN_CCW: List[str] = ["逆时针旋转把手", "拉开门"]
+
     def __init__(self, env : BaseEnv, cfg : dict, logger : Logger) :
 
         super().__init__(env, cfg, logger)
@@ -25,7 +30,8 @@ class OpenDoorManipulation(BaseManipulation) :
         return "clock" + str(self.cfg["env"]["clockwise"])
 
     def reset_kwargs_initial(self) -> Dict[str, Any]:
-        return {"clock_same": False}
+        # Door's env.reset doesn't take `clock_same`; we pass nothing here.
+        return {}
 
     def task_success_for_env(self, env_id: int) -> bool:
         return bool(
@@ -35,6 +41,23 @@ class OpenDoorManipulation(BaseManipulation) :
     def capture_per_env_episode_state(self) -> List[Dict[str, Any]]:
         clock_wise_values = self.env.clock_wise.detach().cpu().numpy().tolist()
         return [{"clock_wise": float(value)} for value in clock_wise_values]
+
+    def apply_frozen_states_to_reset_kwargs(
+        self, frozen_states: List[Dict[str, Any]]
+    ) -> Optional[Dict[str, Any]]:
+        return {
+            "clock_wise_override": [
+                float(state.get("clock_wise", 0.0)) for state in frozen_states
+            ]
+        }
+
+    def canonical_minimal_chain_for_state(
+        self, state: Dict[str, Any]
+    ) -> Optional[List[str]]:
+        cw = state.get("clock_wise") if state else None
+        if cw is None:
+            return None
+        return list(self._CHAIN_CW if int(round(float(cw))) == 1 else self._CHAIN_CCW)
 
     def per_env_extra_log_fields(
         self, env_id: int, episode_state: Dict[str, Any]

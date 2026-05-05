@@ -444,7 +444,12 @@ class OpenPressureCooker(BaseEnv):
             dof_props['damping'][0] = 40.0
             dof_props['upper'][0] = 0.0
             limit_random = self.cfg['env']['asset']['limit_random']
-            if np.random.rand() < self.cfg["env"]["clockwise"]:
+            override = getattr(self, "_clock_wise_override", None)
+            if override is not None and env_id < len(override):
+                use_clockwise = int(round(float(override[env_id]))) == 1
+            else:
+                use_clockwise = np.random.rand() < self.cfg["env"]["clockwise"]
+            if use_clockwise:
                 # clock wise
                 self.clock_wise[env_id] = 1
                 random_lower = -(limit_random*np.random.rand()+1-limit_random)* dof_props['upper'][1]
@@ -573,9 +578,9 @@ class OpenPressureCooker(BaseEnv):
         cabinet_start_pose.r = gymapi.Quat(0.0, 0.0, 1.0, 0.0)
         return cabinet_start_pose
 
-    def reset(self, to_reset="all"):
+    def reset(self, to_reset="all", clock_wise_override=None):
 
-        self._partial_reset(to_reset)
+        self._partial_reset(to_reset, clock_wise_override=clock_wise_override)
 
         self.gym.simulate(self.sim)
         self.gym.fetch_results(self.sim, True)
@@ -591,7 +596,7 @@ class OpenPressureCooker(BaseEnv):
         self.extras["success_rate"] = self.success_rate
         return self.obs_buf, self.rew_buf, self.reset_buf, None
 
-    def _partial_reset(self, to_reset="all"):
+    def _partial_reset(self, to_reset="all", clock_wise_override=None):
 
         """
         reset those need to be reseted
@@ -599,6 +604,8 @@ class OpenPressureCooker(BaseEnv):
 
         if to_reset == "all":
             to_reset = np.ones((self.env_num,))
+        # Stash override for init_obj_dof_state to consume.
+        self._clock_wise_override = clock_wise_override
         reseted = False
         for env_id, reset in enumerate(to_reset):
             # is reset:
@@ -629,6 +636,8 @@ class OpenPressureCooker(BaseEnv):
 
         self.gripper = False
         self.actions = torch.zeros((self.num_envs, self.num_actions), device=self.device)
+        # Clear override so subsequent resets without one fall back to random.
+        self._clock_wise_override = None
         if reseted:
             self.gym.set_dof_state_tensor(
                 self.sim,

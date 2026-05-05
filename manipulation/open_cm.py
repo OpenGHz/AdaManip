@@ -10,6 +10,9 @@ import collections
 
 class OpenCoffeeMachineManipulation(BaseManipulation) :
 
+    _CHAIN_DIRECT: List[str] = ["拉动手柄"]
+    _CHAIN_ROTATE_PULL: List[str] = ["Nx旋转手柄", "拉动手柄"]
+
     def __init__(self, env : BaseEnv, cfg : dict, logger : Logger) :
 
         super().__init__(env, cfg, logger)
@@ -36,6 +39,25 @@ class OpenCoffeeMachineManipulation(BaseManipulation) :
         else:
             values = list(cw)
         return [{"clock_wise": float(value)} for value in values]
+
+    def apply_frozen_states_to_reset_kwargs(
+        self, frozen_states: List[Dict[str, Any]]
+    ) -> Optional[Dict[str, Any]]:
+        return {
+            "clock_wise_override": [
+                float(state.get("clock_wise", 0.0)) for state in frozen_states
+            ]
+        }
+
+    def canonical_minimal_chain_for_state(
+        self, state: Dict[str, Any]
+    ) -> Optional[List[str]]:
+        cw = state.get("clock_wise") if state else None
+        if cw is None:
+            return None
+        return list(
+            self._CHAIN_ROTATE_PULL if int(round(float(cw))) == 1 else self._CHAIN_DIRECT
+        )
 
     def per_env_extra_log_fields(
         self, env_id: int, episode_state: Dict[str, Any]

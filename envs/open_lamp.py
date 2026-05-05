@@ -426,8 +426,18 @@ class OpenLamp(BaseEnv):
             #set door props
             # randomize the rotation direction of the handle and the limit
             # limit_random = self.cfg['env']['asset']['limit_random']
-            random_num = np.random.rand()*3
-            if random_num > 0 and random_num < 1:
+            override = getattr(self, "_clock_wise_override", None)
+            if override is not None and env_id < len(override):
+                target_cw = int(round(float(override[env_id])))
+            else:
+                random_num = np.random.rand() * 3
+                if random_num < 1:
+                    target_cw = 1
+                elif random_num < 2:
+                    target_cw = 2
+                else:
+                    target_cw = 3
+            if target_cw == 1:
                 # clock wise
                 self.clock_wise[env_id] = 1
                 dof_props['lower'][1] = 0.0
@@ -435,7 +445,7 @@ class OpenLamp(BaseEnv):
                 dof_props['upper'][0] = 0.1
                 dof_props['lower'][0] = 0.0
                 dof_props['damping'][0] = 0.0
-            elif random_num >1 and random_num < 2:
+            elif target_cw == 2:
                 # counter clock wise
                 self.clock_wise[env_id] = 2
                 dof_props['damping'][0] = 40.0
@@ -447,7 +457,7 @@ class OpenLamp(BaseEnv):
 
                 dof_props['upper'][1] = random_upper
                 dof_props['lower'][1] = 0.0
-            elif random_num > 2 and random_num < 3:
+            else:
                 self.clock_wise[env_id] = 3
                 dof_props['damping'][0] = 40.0
                 # dof_props['effort'][0] = 400.0
@@ -577,9 +587,9 @@ class OpenLamp(BaseEnv):
         cabinet_start_pose.r = gymapi.Quat(0.0, 0.0, 1.0, 0.0)
         return cabinet_start_pose
 
-    def reset(self, to_reset="all"):
+    def reset(self, to_reset="all", clock_wise_override=None):
 
-        self._partial_reset(to_reset)
+        self._partial_reset(to_reset, clock_wise_override=clock_wise_override)
 
         self.gym.simulate(self.sim)
         self.gym.fetch_results(self.sim, True)
@@ -595,7 +605,7 @@ class OpenLamp(BaseEnv):
         self.extras["success_rate"] = self.success_rate
         return self.obs_buf, self.rew_buf, self.reset_buf, None
 
-    def _partial_reset(self, to_reset="all"):
+    def _partial_reset(self, to_reset="all", clock_wise_override=None):
 
         """
         reset those need to be reseted
@@ -603,6 +613,8 @@ class OpenLamp(BaseEnv):
 
         if to_reset == "all":
             to_reset = np.ones((self.env_num,))
+        # Stash override for init_obj_dof_state to consume.
+        self._clock_wise_override = clock_wise_override
         reseted = False
         for env_id, reset in enumerate(to_reset):
             # is reset:
@@ -633,6 +645,8 @@ class OpenLamp(BaseEnv):
 
         self.gripper = False
         self.actions = torch.zeros((self.num_envs, self.num_actions), device=self.device)
+        # Clear override so subsequent resets without one fall back to random.
+        self._clock_wise_override = None
         if reseted:
             self.gym.set_dof_state_tensor(
                 self.sim,

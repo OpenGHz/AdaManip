@@ -11,6 +11,13 @@ import collections
 
 class OpenSafeManipulation(BaseManipulation) :
 
+    # clock_wise=0 → chain 0 (拉门 — direct pull, no rotation needed)
+    # clock_wise=1 → chain 1 (顺时针旋转旋钮 -> 拉门)
+    # clock_wise=2 → chain 2 (逆时针旋转旋钮 -> 拉门)
+    _CHAIN_DIRECT: List[str] = ["拉门"]
+    _CHAIN_CW: List[str] = ["顺时针旋转旋钮", "拉门"]
+    _CHAIN_CCW: List[str] = ["逆时针旋转旋钮", "拉门"]
+
     def __init__(self, env : BaseEnv, cfg : dict, logger : Logger) :
 
         super().__init__(env, cfg, logger)
@@ -36,6 +43,30 @@ class OpenSafeManipulation(BaseManipulation) :
     def capture_per_env_episode_state(self) -> List[Dict[str, Any]]:
         clock_wise_values = self.env.clock_wise.detach().cpu().numpy().tolist()
         return [{"clock_wise": float(value)} for value in clock_wise_values]
+
+    def apply_frozen_states_to_reset_kwargs(
+        self, frozen_states: List[Dict[str, Any]]
+    ) -> Optional[Dict[str, Any]]:
+        return {
+            "clock_wise_override": [
+                float(state.get("clock_wise", 0.0)) for state in frozen_states
+            ]
+        }
+
+    def canonical_minimal_chain_for_state(
+        self, state: Dict[str, Any]
+    ) -> Optional[List[str]]:
+        cw = state.get("clock_wise") if state else None
+        if cw is None:
+            return None
+        cw_int = int(round(float(cw)))
+        if cw_int == 0:
+            return list(self._CHAIN_DIRECT)
+        if cw_int == 1:
+            return list(self._CHAIN_CW)
+        if cw_int == 2:
+            return list(self._CHAIN_CCW)
+        return None
 
     def per_env_extra_log_fields(
         self, env_id: int, episode_state: Dict[str, Any]
