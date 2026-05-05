@@ -1093,17 +1093,22 @@ class BaseManipulation:
     def diffusion_evaluate(self, *models):
         """Adaptive eval loop shared by all tasks.
 
-        ``*models`` is the controller's call: ``(grasp_net, manip_net)`` for
-        ``cfg.task.grasp == True`` tasks, ``(manip_net,)`` for
-        ``cfg.task.grasp == False``. Per-task customization happens through
-        the hooks above plus ``diffusion_eval_grasp_preamble``.
+        ``*models`` is the controller's call: ``(grasp_net, manip_net)`` when
+        ``cfg.model.grasp == True`` (controller has loaded a separate grasp
+        checkpoint), ``(manip_net,)`` otherwise. We read the same flag the
+        controller uses to decide its call shape, so the dispatch contract
+        stays consistent. ``cfg.task.grasp`` separately controls data-collection
+        routing in ``GtController`` and is not used here.
+        Per-task customization happens through the hooks above plus
+        ``diffusion_eval_grasp_preamble``.
         """
         task_cfg = self.cfg.get("task", {}) or {}
-        grasp_enabled = bool(task_cfg.get("grasp", False))
+        model_cfg = self.cfg.get("model", {}) or {}
+        grasp_enabled = bool(model_cfg.get("grasp", False))
         if grasp_enabled:
             if len(models) < 2:
                 raise RuntimeError(
-                    "task.grasp=True requires diffusion_evaluate(grasp_net, manip_net)"
+                    "model.grasp=True requires diffusion_evaluate(grasp_net, manip_net)"
                 )
             grasp_net, diffusion = models[0], models[1]
         else:

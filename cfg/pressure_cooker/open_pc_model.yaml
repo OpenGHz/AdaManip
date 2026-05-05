@@ -3,7 +3,6 @@ task:
   num_episode: 20
   num_eval_episode: 10
   policy: "adaptive"
-  grasp: False
   max_step: 25
 
 model:
