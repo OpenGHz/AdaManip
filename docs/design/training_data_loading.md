@@ -1,6 +1,6 @@
 # AdaManip Training Data Loading Notes
 
-Please use `docs/data_collection.md` as the source of truth for collection-side storage and writing semantics.
+Please use `docs/design/data_collection.md` as the source of truth for collection-side storage and writing semantics.
 
 ## 1. Multi-File Dataset Merge Logic
 

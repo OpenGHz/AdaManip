@@ -240,4 +240,4 @@ AdaManip 的主训练数据存储在 zarr 文件中，通常为 `demo_data.zip`�
 6. `command_chains` 中每条链都必须可在任务级 `expanded_minimal_chains` 中找到同值链，且前缀匹配 `prefix`；`command_chain_ids` 必须与之逐项对应。
 7. `language_expanded.json` 必须包含 `attempt_chain_counts`，且其 `count` 总和等于 `trajectory_language.jsonl` 中轨迹总数。
 
-语言条件向量的生成与存储规范已迁移到 `docs/data_preprocess.md`，本文件仅覆盖采集阶段内容。
+语言条件向量的生成与存储规范已迁移到 `docs/design/data_preprocess.md`，本文件仅覆盖采集阶段内容。
