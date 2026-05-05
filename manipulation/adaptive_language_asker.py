@@ -1,11 +1,15 @@
 """Adaptive language-conditioning state machine and asker wrapper.
 
-Used by ``OpenMicroWaveManipulation.diffusion_evaluate`` when
+Used by ``BaseManipulation.diffusion_evaluate`` when
 ``cfg.task.adaptive_language.enable`` is true. Each env in the eval batch holds
 its own ``AdaptiveLanguageState``: each unlocked episode picks a chain id from
 the still-untried pool, optionally following a diagnostic priority order, and
-calls the asker; subsequent episodes freeze ``clock_wise`` and either reuse the
-locked chain id (if the asker confirmed success) or try the next chain.
+calls the asker; subsequent episodes reuse the locked chain id (if the asker
+confirmed success) or try the next chain. Task-specific environment state that
+needs to be frozen across episodes (e.g. ``clock_wise`` for the microwave task)
+is owned by the manipulation subclass via the
+``capture_per_env_episode_state`` / ``apply_frozen_states_to_reset_kwargs``
+hooks; this module is fully task-agnostic.
 ``AdaptiveLanguageAsker`` wraps the
 ``Video2Prompt`` / ``Video2PromptGroundTruth`` askers from ``try_to_remember``.
 """
@@ -26,10 +30,16 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class AdaptiveLanguageState:
-    """Per-env state for the adaptive language-conditioning loop."""
+    """Per-env state for the adaptive language-conditioning loop.
+
+    Task-specific frozen environment state (e.g. ``clock_wise`` for the
+    microwave task) is owned by the manipulation class via its
+    ``capture_per_env_episode_state`` /
+    ``apply_frozen_states_to_reset_kwargs`` hooks; this struct only tracks
+    chain-id bookkeeping that's shared across tasks.
+    """
 
     num_chains: int
-    frozen_clock_wise: Optional[float] = None
     locked_chain_id: Optional[int] = None
     current_chain_id: Optional[int] = None
     tried_chain_ids: set = field(default_factory=set)
@@ -233,30 +243,29 @@ class AdaptiveLanguageAsker:
     def is_ground_truth(self) -> bool:
         return self.cfg.is_ground_truth
 
-    def _gt_chain_for_clock_wise(self, clock_wise: float) -> List[str]:
-        # Microwave canonical mapping: locked door (clock_wise==1) needs the
-        # button press first; otherwise a direct pull is enough.
-        return ["按按钮", "拉门"] if int(round(float(clock_wise))) == 1 else ["拉门"]
-
     def ask(
         self,
         video_path: Optional[Union[str, Path]],
         action_array: Optional[np.ndarray],
         env_id: int,
         done_flag: bool,
-        frozen_clock_wise: Optional[float],
+        ground_truth_chain: Optional[List[str]] = None,
     ) -> Tuple[bool, Optional[int]]:
-        """Run the asker for one env. Returns (success, chain_id-or-None)."""
+        """Run the asker for one env. Returns (success, chain_id-or-None).
+
+        ``ground_truth_chain`` is the canonical minimal chain (list[str]) for this
+        env's current episode, computed by the caller from task-specific state.
+        Required for the ground-truth platform; ignored by LLM platforms.
+        """
 
         if self.is_ground_truth:
-            if frozen_clock_wise is None:
+            if ground_truth_chain is None:
                 logger.warning(
-                    "AdaptiveLanguageAsker[gt]: env=%d missing frozen_clock_wise; treating as failure",
+                    "AdaptiveLanguageAsker[gt]: env=%d missing ground_truth_chain; treating as failure",
                     env_id,
                 )
                 return False, None
-            chain = self._gt_chain_for_clock_wise(frozen_clock_wise)
-            traj = {"success": bool(done_flag), "minimal_chain": chain}
+            traj = {"success": bool(done_flag), "minimal_chain": list(ground_truth_chain)}
             self.video2prompt.set_ground_truth(traj)
             success = bool(self.video2prompt.is_success())
             if not success:
