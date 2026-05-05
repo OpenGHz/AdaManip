@@ -473,6 +473,36 @@ class BaseManipulation:
         """
         return {}
 
+    def collect_observation_for_eval(self):
+        """Return (pcs, env_state) for the current step of the manipulation
+        rollout. Subclasses with non-standard ``env.collect_diff_data`` kwargs
+        (e.g. bottle's ``flag=False``) override this; default just calls the
+        env without arguments and runs ``obs_wrapper``.
+        """
+        obs = self.env.collect_diff_data()
+        return obs_wrapper(obs)
+
+    def diffusion_eval_grasp_preamble(self, grasp_net) -> None:
+        """For grasp-pipeline tasks: run the task's grasp policy + engage the
+        gripper before the manipulation rollout starts.
+
+        Default behavior covers all current grasp tasks: call the task's
+        ``diffusion_eval_grasp`` method (defined per-task), then engage the
+        gripper, hold for 10 simulation ticks, and seed ``env.actions`` with
+        the current hand pose. Subclasses with non-standard preambles can
+        override this entirely. Tasks with ``cfg.task.grasp == False`` never
+        invoke this hook.
+        """
+        if hasattr(self, "diffusion_eval_grasp"):
+            self.diffusion_eval_grasp(grasp_net)
+        if hasattr(self.env, "hand_rigid_body_tensor"):
+            hand_pose = self.env.hand_rigid_body_tensor[:, :7]
+            self.env.gripper = True
+            for _ in range(10):
+                self.env.step(hand_pose)
+            init_actions = self.action_process(hand_pose)
+            self.env.actions = init_actions
+
     # =====================================================================
     # Save dirs
     # =====================================================================
@@ -1060,11 +1090,42 @@ class BaseManipulation:
     # diffusion_evaluate — task-agnostic adaptive eval loop
     # =====================================================================
 
-    def diffusion_evaluate(self, diffusion):
-        eps_num = self.cfg["task"]["num_episode"]
+    def diffusion_evaluate(self, *models):
+        """Adaptive eval loop shared by all tasks.
+
+        ``*models`` is the controller's call: ``(grasp_net, manip_net)`` for
+        ``cfg.task.grasp == True`` tasks, ``(manip_net,)`` for
+        ``cfg.task.grasp == False``. Per-task customization happens through
+        the hooks above plus ``diffusion_eval_grasp_preamble``.
+        """
+        task_cfg = self.cfg.get("task", {}) or {}
+        grasp_enabled = bool(task_cfg.get("grasp", False))
+        if grasp_enabled:
+            if len(models) < 2:
+                raise RuntimeError(
+                    "task.grasp=True requires diffusion_evaluate(grasp_net, manip_net)"
+                )
+            grasp_net, diffusion = models[0], models[1]
+        else:
+            if len(models) < 1:
+                raise RuntimeError(
+                    "diffusion_evaluate(manip_net) requires at least 1 argument"
+                )
+            grasp_net = None
+            diffusion = models[0]
+
+        # Episode count: prefer task.num_eval_episode, fall back to task.num_episode.
+        eps_num = int(task_cfg.get("num_eval_episode", task_cfg.get("num_episode", 1)))
+        # Inner-loop step bound; default 32 (microwave's historical value).
+        max_step = int(task_cfg.get("max_step", 32))
         succ_cnt = 0
         succ_rate = []
-        language_embedding_bank = self._load_eval_language_embedding_bank(diffusion)
+        # Skip language-embedding bank load when the policy doesn't use language
+        # conditioning — most non-microwave tasks fall here.
+        use_language = bool(self.cfg.get("model", {}).get("use_language_conditioning", False))
+        language_embedding_bank = (
+            self._load_eval_language_embedding_bank(diffusion) if use_language else None
+        )
         eval_save_dir = self._build_eval_save_dir()
         adaptive_cfg = self.cfg.get("task", {}).get("adaptive_language", {}) or {}
         adaptive_enable = bool(adaptive_cfg.get("enable", False))
@@ -1241,13 +1302,17 @@ class BaseManipulation:
                     f"[adaptive] eps 1 frozen per-env state: {adaptive_frozen_states}"
                 )
 
-            self.env.gripper = torch.zeros((self.env.num_envs, 1), device=self.env.device)
+            # Grasp-pipeline tasks: run grasp policy + engage gripper before the
+            # manipulation rollout. No-op for tasks with cfg.task.grasp=False.
+            if grasp_enabled:
+                self.diffusion_eval_grasp_preamble(grasp_net)
+            else:
+                self.env.gripper = torch.zeros((self.env.num_envs, 1), device=self.env.device)
             if self.video_recorder is not None:
                 self.video_recorder.start_episode(eps)
                 self._record_video_frame()
 
-            obs = self.env.collect_diff_data()
-            pcs, env_state = obs_wrapper(obs)
+            pcs, env_state = self.collect_observation_for_eval()
             pcs_deque = collections.deque(
                 [pcs] * diffusion.args.obs_horizon, maxlen=diffusion.args.obs_horizon,
             )
@@ -1262,17 +1327,26 @@ class BaseManipulation:
             )
 
             try:
-                while step <= 32:
-                    action = diffusion.infer_action_with_seg(
-                        pcs_deque, env_state_deque,
-                        language_embedding=episode_language_embedding,
-                    ).detach()
+                while step <= max_step:
+                    if use_language:
+                        action = diffusion.infer_action_with_seg(
+                            pcs_deque, env_state_deque,
+                            language_embedding=episode_language_embedding,
+                        ).detach()
+                    else:
+                        action = diffusion.infer_action_with_seg(
+                            pcs_deque, env_state_deque,
+                        ).detach()
                     action = action[:, :diffusion.args.action_horizon, :]
                     step += diffusion.args.action_horizon
                     for act in range(action.shape[1]):
                         quat = self.rotate_6d_to_quat(action[:, act, 3:9])
                         pre_action = torch.cat([action[:, act, :3], quat], dim=-1)
-                        self.env.gripper = (action[:, act, -1] > 0.5).unsqueeze(-1).int()
+                        # 10-D action carries a gripper command in the last dim
+                        # (microwave style); 9-D action keeps the gripper state
+                        # set by the grasp preamble (door/safe/etc style).
+                        if action.shape[-1] > 9:
+                            self.env.gripper = (action[:, act, -1] > 0.5).unsqueeze(-1).int()
                         for j in range(15):
                             self.env.step(pre_action)
 
@@ -1282,8 +1356,7 @@ class BaseManipulation:
                             action_step_arr = action[:, act, :].detach().cpu().numpy()
                             for env_id in range(self.env.num_envs):
                                 episode_action_logs[env_id].append(action_step_arr[env_id])
-                        obs = self.env.collect_diff_data()
-                        pcs, env_state = obs_wrapper(obs)
+                        pcs, env_state = self.collect_observation_for_eval()
                         pcs_deque.append(pcs)
                         env_state_deque.append(env_state)
 

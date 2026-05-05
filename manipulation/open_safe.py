@@ -2,6 +2,7 @@ from manipulation.base_manipulation import BaseManipulation
 from envs.base_env import BaseEnv
 from manipulation.utils.transform import *
 from logging import Logger
+from typing import Any, Dict, List, Optional
 import numpy as np
 from dataset.dataset import Experience, Episode_Buffer, obs_wrapper
 import os
@@ -13,6 +14,37 @@ class OpenSafeManipulation(BaseManipulation) :
     def __init__(self, env : BaseEnv, cfg : dict, logger : Logger) :
 
         super().__init__(env, cfg, logger)
+
+    # ------------------------------------------------------------------
+    # Hooks consumed by BaseManipulation.diffusion_evaluate
+    # ------------------------------------------------------------------
+
+    def language_template_task_name(self) -> str:
+        return "safe"
+
+    def dataset_dir_suffix(self) -> str:
+        return "clock" + str(self.cfg["env"]["clockwise"])
+
+    def reset_kwargs_initial(self) -> Dict[str, Any]:
+        return {"clock_same": False}
+
+    def task_success_for_env(self, env_id: int) -> bool:
+        return bool(
+            (torch.abs(self.env.one_dof_tensor[env_id, 0]) > np.pi / 7).cpu().item()
+        )
+
+    def capture_per_env_episode_state(self) -> List[Dict[str, Any]]:
+        clock_wise_values = self.env.clock_wise.detach().cpu().numpy().tolist()
+        return [{"clock_wise": float(value)} for value in clock_wise_values]
+
+    def per_env_extra_log_fields(
+        self, env_id: int, episode_state: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        clock_wise = episode_state.get("clock_wise") if episode_state else None
+        return {
+            "clock_wise": float(clock_wise) if clock_wise is not None else None,
+            "final_one_dof": float(self.env.one_dof_tensor[env_id, 0].item()),
+        }
 
     '''
     test env
@@ -151,52 +183,11 @@ class OpenSafeManipulation(BaseManipulation) :
                 for j in range(15):
                     self.env.step(pred_pose)
     
-    def diffusion_evaluate(self, diffusion):
-        eps_num = self.cfg["task"]["num_episode"]
-        succ_cnt = 0
-        succ_rate = []
-        for eps in range(eps_num):
-            print("eps_{}".format(eps+1))
-            done_flag = [False] * self.env.num_envs
-            self.env.reset(clock_same=False)    
-            self.env.gripper = torch.zeros((self.env.num_envs,1),device=self.env.device)        
-            obs = self.env.collect_diff_data()
-            pcs, env_state = obs_wrapper(obs)
-            pcs_deque = collections.deque([pcs] * diffusion.args.obs_horizon, maxlen=diffusion.args.obs_horizon)
-            env_state_deque = collections.deque([env_state] * diffusion.args.obs_horizon, maxlen=diffusion.args.obs_horizon)
-            hand_pose = self.env.hand_rigid_body_tensor[:,:7]
-            step = 0
-            while step <= 50:
-                action = diffusion.infer_action_with_seg(pcs_deque, env_state_deque).detach()
-                action = action[:, :diffusion.args.action_horizon, :]
-                step += diffusion.args.action_horizon
-                for act in range(action.shape[1]):
-                    quat = self.rotate_6d_to_quat(action[:, act, 3:9])
-                    pre_action = torch.cat([action[:, act, :3], quat], dim=-1)
-                    self.env.gripper = (action[:, act, -1] > 0.5).unsqueeze(-1).int()
-                    for env_id in range(self.env.num_envs):
-                        if done_flag[env_id]:
-                            pre_action[env_id, :] = hand_pose[env_id, :]
-                    for j in range(15):
-                        self.env.step(pre_action)
-                    self.env.actions = action[:, act, :]
-                    obs = self.env.collect_diff_data()
-                    pcs, env_state = obs_wrapper(obs)
-                    pcs_deque.append(pcs)
-                    env_state_deque.append(env_state)
-                
-                for env_id in range(self.env.num_envs):
-                    if (torch.abs(self.env.one_dof_tensor[env_id, 0]) > np.pi/7).cpu().item() and not done_flag[env_id]:
-                        done_flag[env_id] = True
-                        succ_cnt += 1
-                        print(f"Env {env_id} Succeeded") 
-            cur_rate = succ_cnt/(self.env.num_envs)
-            print(f"Eps {eps+1}, current succ rate {cur_rate}")
-            succ_rate.append(cur_rate)
-            succ_cnt = 0
-        print(f"Average Success rate: {np.mean(succ_rate)}")
-        print(f"Success rate std: {np.std(succ_rate)}")
-    
+    # diffusion_evaluate is provided by BaseManipulation. Set
+    # task.max_step in cfg to control inner-loop bound (this task historically
+    # used 50; default base value is 32).
+
+
     def process_data(self, goal_pos):
         obs = self.env.collect_diff_data()
         pc, env_state = obs_wrapper(obs)

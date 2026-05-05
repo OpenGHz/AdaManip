@@ -3,6 +3,7 @@ from manipulation.base_manipulation import BaseManipulation
 from envs.base_env import BaseEnv
 from manipulation.utils.transform import *
 from logging import Logger
+from typing import Any, Dict, List, Optional
 import numpy as np
 from dataset.dataset import Experience, Episode_Buffer, obs_wrapper
 import os
@@ -13,6 +14,44 @@ class OpenBottleManipulation(BaseManipulation) :
     def __init__(self, env : BaseEnv, cfg : dict, logger : Logger) :
 
         super().__init__(env, cfg, logger)
+
+    # ------------------------------------------------------------------
+    # Hooks consumed by BaseManipulation.diffusion_evaluate
+    # ------------------------------------------------------------------
+
+    def language_template_task_name(self) -> str:
+        return "bottle"
+
+    def dataset_dir_suffix(self) -> str:
+        return "clock" + str(self.cfg["env"]["clockwise"])
+
+    def task_success_for_env(self, env_id: int) -> bool:
+        return bool(
+            (torch.abs(self.env.one_dof_tensor[env_id, 0]) > 0.025).cpu().item()
+        )
+
+    def capture_per_env_episode_state(self) -> List[Dict[str, Any]]:
+        cw = self.env.clock_wise
+        if hasattr(cw, "detach"):
+            values = cw.detach().cpu().numpy().tolist()
+        else:
+            values = list(cw)
+        return [{"clock_wise": float(value)} for value in values]
+
+    def per_env_extra_log_fields(
+        self, env_id: int, episode_state: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        clock_wise = episode_state.get("clock_wise") if episode_state else None
+        return {
+            "clock_wise": float(clock_wise) if clock_wise is not None else None,
+            "final_one_dof": float(self.env.one_dof_tensor[env_id, 0].item()),
+        }
+
+    def collect_observation_for_eval(self):
+        # Bottle's env.collect_diff_data takes a `flag` kwarg controlling
+        # observation normalization; the manipulation rollout uses flag=False.
+        obs = self.env.collect_diff_data(flag=False)
+        return obs_wrapper(obs)
 
     def test_env(self, pose, eval=False):
         batch_size = pose.shape[0]
@@ -50,71 +89,9 @@ class OpenBottleManipulation(BaseManipulation) :
             for j in range(15):
                 self.env.step(pred_pose)   
 
-    def diffusion_evaluate(self, grasp_net, manip_net):
-        eps_num = self.cfg["task"]["num_eval_episode"]
-        policy = self.cfg["task"]["policy"]
-        max_step = self.cfg["task"]["max_step"]
-        succ_cnt = 0
-        succ_rate = []
-        print("eval_eps_{},max_step_{},policy_{}".format(eps_num, max_step, policy))
-        for eps in range(eps_num):
-            self.env.reset()
-            done_flag = [False] * self.env.num_envs
+    # diffusion_evaluate is provided by BaseManipulation.
 
-            self.diffusion_eval_grasp(grasp_net)
-            hand_pose = self.env.hand_rigid_body_tensor[:,:7]
-            self.env.gripper = True
-            for i in range(10):
-                self.env.step(hand_pose)
 
-            init_actions = self.action_process(hand_pose)
-            self.env.actions = init_actions
-            #################manipulation policy#################
-            obs = self.env.collect_diff_data(flag = False)
-            pcs, env_state = obs_wrapper(obs)
-            pcs_deque = collections.deque([pcs] * manip_net.args.obs_horizon, maxlen=manip_net.args.obs_horizon)
-            env_state_deque = collections.deque([env_state] * manip_net.args.obs_horizon, maxlen=manip_net.args.obs_horizon)
-            step = 0
-            action_horizon = 1
-            while step < max_step:
-                pred_poses = manip_net.infer_action_with_seg(pcs_deque, env_state_deque).detach()
-                action = pred_poses[:, :action_horizon, :]
-                step += action_horizon
-
-                for act in range(action.shape[1]):
-                    quat = self.rotate_6d_to_quat(action[:, act, 3:])
-                    pre_action = torch.cat([action[:, act, :3], quat], dim=-1)
-                    self.env.get_obj_dof_property_tensor()
-                    
-                    hand_pose = self.env.hand_rigid_body_tensor[:,:7].clone()
-                    for env_id in range(self.env.num_envs):
-                        if done_flag[env_id]:
-                            pre_action[env_id] = hand_pose[env_id]
-                    for j in range(15):
-                        self.env.step(pre_action)
-
-                    self.env.actions = action[:, act, :]
-                    obs = self.env.collect_diff_data(flag = False)
-                    pcs, env_state = obs_wrapper(obs)
-                        
-                    pcs_deque.append(pcs)
-                    env_state_deque.append(env_state)  
-                    
-                for env_id in range(self.env.num_envs):
-                    if (torch.abs(self.env.one_dof_tensor[env_id, 0]) > 0.025).cpu().item() and not done_flag[env_id]:
-                        #print(f"Env {env_id} Succeeded")
-                        done_flag[env_id] = True
-                        succ_cnt += 1
-            cur_rate = succ_cnt/(self.env.num_envs)
-            print(done_flag)
-            print(f"Eps {eps+1}, current succ rate {cur_rate}")
-            succ_rate.append(cur_rate)
-            succ_cnt = 0
-            
-        print(f"Average Success rate: {np.mean(succ_rate)}")
-        print(f"Success rate std: {np.std(succ_rate)}")
-        return
-    
     def diffusion_eval_grasp(self, grasp_net):
         obs = self.env.collect_diff_data(flag = True)
         pcs, env_state = obs_wrapper(obs)

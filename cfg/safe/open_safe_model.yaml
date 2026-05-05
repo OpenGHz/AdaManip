@@ -2,6 +2,7 @@ task:
   task_name: "open_safe"
   policy: "ada"
   num_episode: 10
+  max_step: 50
   seed: 6
   grasp: False
 
