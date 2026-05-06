@@ -2,6 +2,8 @@
 
 数据采集脚本位于third_party/ada_manip/script中各个任务文件夹中的collect_*.sh。
 
+> 各任务在 demo 形态、cw 语义、override 钩子、cfg 默认值等维度上的横向对照见 [`tasks_comparison.md`](tasks_comparison.md)。本文档只覆盖每个任务的**语义和操作链**。
+
 ## ADAPTIVE MANIPULATION SEQUENCE
 
 1. Bottle: Grasp the Cap. Randomly choose the initial action from {Lift Up Cap, Rotate Cap}. If Lift Up fails, do Rotate Cap. If the previous action is Rotate Cap, randomly sample Rotate/Lift.
