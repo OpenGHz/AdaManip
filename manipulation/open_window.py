@@ -142,11 +142,13 @@ class OpenWindowManipulation(BaseManipulation) :
     '''
     def collect_grasp_data(self):
         eps_num = self.cfg["task"]["num_episode"]
+        ctx = self.collect_setup(role="grasp")
         demo_buffer = Experience()
         for eps in range(eps_num):
             self.eps_buffer = [Episode_Buffer() for _ in range(self.env.num_envs)]
             print("eps_{}".format(eps+1))
             self.env.reset()
+            self.collect_episode_start(ctx, eps)
             pre_pose = self.env.adjust_hand_pose.clone()
             pre_pose[:,2] += 0.01
             pre_pose[:,0] += self.env.gripper_length*2
@@ -156,6 +158,7 @@ class OpenWindowManipulation(BaseManipulation) :
 
                 for j in range(10):
                     self.env.step(pre_pose)
+                self._record_video_frame()
 
                 gt_action = self.action_process(pre_pose)
                 self.env.actions = gt_action.clone()
@@ -168,23 +171,20 @@ class OpenWindowManipulation(BaseManipulation) :
 
                 for j in range(10):
                     self.env.step(pre_pose)
-                
+                self._record_video_frame()
+
                 gt_action = self.action_process(pre_pose)
                 self.env.actions = gt_action.clone()
                 for env_id in range(self.env.num_envs):
                     self.eps_buffer[env_id].add(pc[env_id], env_state[env_id], gt_action[env_id])
 
-            # update env end flag
+            done_flag = [True] * self.env.num_envs
             for env_id in range(self.env.num_envs):
                 demo_buffer.append(self.eps_buffer[env_id])
             print(f"Episode {eps} Succeeded")
+            self.collect_episode_end(ctx, eps, done_flag)
 
-        if self.cfg['env']['collectData']:
-            dataset_path = "grasp_window" + "_" + str(self.cfg["env"]["asset"]["AssetNum"])+"_eps"+str(self.cfg["task"]["num_episode"])+"_clock"+str(self.cfg["env"]["clockwise"])
-            save_dir = './demo_data/'+ dataset_path
-            save_path = save_dir + '/demo_data.zip'
-            os.makedirs(save_dir, exist_ok=True)
-            demo_buffer.save(save_path)
+        self.collect_finalize(ctx, demo_buffer)
 
 
     '''
@@ -195,12 +195,14 @@ class OpenWindowManipulation(BaseManipulation) :
         policy = self.cfg["task"]["policy"]
         print(f"policy: {policy}")
         succ_cnt = [0] * self.env.num_envs
+        ctx = self.collect_setup(role="manip")
         demo_buffer = Experience()
         for eps in range(eps_num):
             eps_buffer = [Episode_Buffer() for _ in range(self.env.num_envs)]
             done_flag = [False] * self.env.num_envs
             print("eps_{}".format(eps+1))
             self.env.reset()
+            self.collect_episode_start(ctx, eps)
 
             pre_pose = self.env.adjust_hand_pose.clone()
             pre_pose[:,2] += 0.01
@@ -208,16 +210,19 @@ class OpenWindowManipulation(BaseManipulation) :
             for i in range(3):
                 for j in range(10):
                     self.env.step(pre_pose)
+                self._record_video_frame()
             pre_pose[:, 0] -= self.env.gripper_length + 0.012
             for i in range(3):
                 for j in range(10):
                     self.env.step(pre_pose)
+                self._record_video_frame()
 
             hand_pose = self.env.hand_rigid_body_tensor[:,:7]
 
             self.env.gripper = True
             for i in range(10):
                 self.env.step(hand_pose)
+            self._record_video_frame()
             init_actions = self.action_process(hand_pose)
             self.env.actions = init_actions
             ####################start collect manipulation data###################
@@ -227,14 +232,12 @@ class OpenWindowManipulation(BaseManipulation) :
             hand_pose = self.env.hand_rigid_body_tensor[:,:7]
             down_q = torch.stack(self.env.num_envs * [torch.tensor([0.0, 1.0, 0, 0])]).to(self.env.device).view((self.env.num_envs, 4))
             rotate_dof = self.env.two_dof_tensor[:,0]
-            
+
             handle_q = self.env.part_rigid_body_tensor[:, 3:7]
-            
+
             for t in range(max_step):
                 cur_p = hand_pose[:, :3]
-                # cur_q = self.env.hand_rigid_body_tensor[:,3:7]
                 pre_p = cur_p.clone()
-                # pre_q = cur_q.clone()
                 y_rotate_dir = quat_axis(handle_q, axis=0) # y-up
                 r_rotate_dir = -y_rotate_dir
                 open_dir = quat_axis(handle_q, axis=2)
@@ -251,11 +254,11 @@ class OpenWindowManipulation(BaseManipulation) :
                         pre_p[i,:] += rotate_size * r_rotate_dir[i].squeeze(0)
                     elif res == "y":
                         pre_p[i,:] += rotate_size * y_rotate_dir[i].squeeze(0)
-                        
+
                 pred_q = quat_mul(handle_q, down_q)
                 pred_pose = torch.cat([pre_p, pred_q], dim=-1).float()
                 gt_pose = self.action_process(pred_pose)
-                
+
                 for env_id in range(self.env.num_envs):
                     if not done_flag[env_id]:
                         obs = self.env.collect_single_diff_data(env_id)
@@ -264,7 +267,8 @@ class OpenWindowManipulation(BaseManipulation) :
 
                 for j in range(15):
                     self.env.step(pred_pose)
-                
+                self._record_video_frame()
+
                 self.env.actions = gt_pose
                 for env_id in range(self.env.num_envs):
                     if (torch.abs(self.env.one_dof_tensor[env_id, 0]) > np.pi/6).cpu().item() and not done_flag[env_id]:
@@ -273,12 +277,9 @@ class OpenWindowManipulation(BaseManipulation) :
                         succ_cnt[env_id] += 1
                         print(f"Env {env_id} Succeeded")
             print(succ_cnt)
-        if self.cfg['env']['collectData']:
-            dataset_path = "manip_window"+"_"+self.cfg["task"]["policy"] + "_" + str(self.cfg["env"]["asset"]["AssetNum"])+"_eps"+str(self.cfg["task"]["num_episode"])+ "_clock"+str(self.cfg["env"]["clockwise"])
-            save_dir = './demo_data/'+ dataset_path
-            save_path = save_dir + '/demo_data.zip'
-            os.makedirs(save_dir, exist_ok=True)
-            demo_buffer.save(save_path)
+            self.collect_episode_end(ctx, eps, done_flag)
+
+        self.collect_finalize(ctx, demo_buffer)
     
     def succ_policy(self, env_id):
         clock_wise = self.env.clock_wise[env_id]

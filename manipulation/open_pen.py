@@ -59,6 +59,36 @@ class OpenPenManipulation(BaseManipulation) :
             self._CHAIN_ROTATE_LIFT if int(round(float(cw))) == 1 else self._CHAIN_DIRECT
         )
 
+    def ground_truth_chain_for_collect(
+        self, env_id: int, state: Dict[str, Any]
+    ) -> Optional[List[str]]:
+        # Env-state-derived optimal chain. ``_pen_intrinsic_n[env_id]`` is
+        # the per-env N_min recorded by ``collect_manip_data`` at the
+        # cumulative rotation step where ``self.env.open_bottle_stage``
+        # first transitioned to True (env-physics fact, deterministic per
+        # env state). All shared logic — lookup + warn-on-miss fallback —
+        # lives in BaseManipulation.ground_truth_chain_from_intrinsic_n.
+        return self.ground_truth_chain_from_intrinsic_n(
+            env_id=env_id,
+            state=state,
+            n_min_attr="_pen_intrinsic_n",
+            rotate_op="旋转笔盖",
+            lift_op="向上提起笔盖",
+            success_hint="opened the pen cap",
+        )
+
+    def concrete_attempt_chain_for_collect(self, env_id: int, state: Dict[str, Any]):
+        chains = getattr(self, "_pen_attempt_chains", None)
+        statuses = getattr(self, "_pen_stage_statuses", None)
+        if (
+            chains is not None
+            and statuses is not None
+            and env_id < len(chains)
+            and chains[env_id]
+        ):
+            return list(chains[env_id]), list(statuses[env_id])
+        return super().concrete_attempt_chain_for_collect(env_id, state)
+
     def per_env_extra_log_fields(
         self, env_id: int, episode_state: Dict[str, Any]
     ) -> Dict[str, Any]:
@@ -151,26 +181,29 @@ class OpenPenManipulation(BaseManipulation) :
     '''
     def collect_grasp_data(self):
         eps_num = self.cfg["task"]["num_episode"]
+        ctx = self.collect_setup(role="grasp")
         demo_buffer = Experience()
         np.random.seed(self.cfg['task']['seed'])
         for eps in range(eps_num):
             self.eps_buffer = [Episode_Buffer() for _ in range(self.env.num_envs)]
             print("eps_{}".format(eps+1))
             self.env.reset()
+            self.collect_episode_start(ctx, eps)
             pre_pose = self.env.adjust_hand_pose.clone()
             pre_pose[:, 2] += self.env.gripper_length*2
             for i in range(3):
                 obs = self.env.collect_diff_data()
-                pc, env_state = obs_wrapper(obs) 
+                pc, env_state = obs_wrapper(obs)
 
                 for j in range(10):
                     self.env.step(pre_pose)
-                
+                self._record_video_frame()
+
                 gt_action = self.action_process(pre_pose)
                 self.env.actions = gt_action.clone()
                 for env_id in range(self.env.num_envs):
                     self.eps_buffer[env_id].add(pc[env_id], env_state[env_id], gt_action[env_id])
-                
+
             # grasp the handle
             pre_pose[:, 2] -= self.env.gripper_length - 0.016
             for i in range(3):
@@ -179,23 +212,21 @@ class OpenPenManipulation(BaseManipulation) :
 
                 for j in range(10):
                     self.env.step(pre_pose)
-                
+                self._record_video_frame()
+
                 gt_action = self.action_process(pre_pose)
                 self.env.actions = gt_action.clone()
                 for env_id in range(self.env.num_envs):
                     self.eps_buffer[env_id].add(pc[env_id], env_state[env_id], gt_action[env_id])
-            
-            # update env end flag
+
+            # All envs treated as successful in the grasp demo (positioning policy).
+            done_flag = [True] * self.env.num_envs
             for env_id in range(self.env.num_envs):
                 demo_buffer.append(self.eps_buffer[env_id])
             print(f"Episode {eps} Succeeded")
-            
-        if self.cfg['env']['collectData']:
-            dataset_path = "grasp_pen" + "_" + str(self.cfg["env"]["asset"]["AssetNum"])+"_eps"+str(self.cfg["task"]["num_episode"])+"_clock"+str(self.cfg["env"]["clockwise"])
-            save_dir = './demo_data/'+ dataset_path
-            save_path = save_dir + '/demo_data.zip'
-            os.makedirs(save_dir, exist_ok=True)
-            demo_buffer.save(save_path)
+            self.collect_episode_end(ctx, eps, done_flag)
+
+        self.collect_finalize(ctx, demo_buffer)
 
     '''                     
     collect data
@@ -205,6 +236,7 @@ class OpenPenManipulation(BaseManipulation) :
         policy = self.cfg["task"]["policy"]
         max_step = 30 if policy == "adaptive" else 25
         print("policy_{}--max_step_{}--num_eps_{}".format(policy, max_step, eps_num))
+        ctx = self.collect_setup(role="manip")
         demo_buffer = Experience()
 
         for eps in range(eps_num):
@@ -212,40 +244,86 @@ class OpenPenManipulation(BaseManipulation) :
             done_flag = [False] * self.env.num_envs
             print("eps_{}".format(eps+1))
             self.env.reset()
+            self.collect_episode_start(ctx, eps)
+            # Per-episode attempt-chain state. Each entry in
+            # ``_pen_attempt_chains[env_id]`` is one stage string
+            # (e.g. "3x旋转笔盖" or "向上提起笔盖"); ``_pen_stage_statuses``
+            # tracks per-stage success/failure (rotate stages = True;
+            # lift stages = False unless they caused success).
+            self._pen_attempt_chains = [[] for _ in range(self.env.num_envs)]
+            self._pen_stage_statuses = [[] for _ in range(self.env.num_envs)]
+            # Per-env intrinsic N: cumulative rotation count at which the
+            # env's ``open_bottle_stage`` flag first transitions to True.
+            # Snapshot of env physics — same env state always yields the
+            # same N regardless of demo's eventual rollout. ``ground_truth_chain_for_collect``
+            # reads this at episode end.
+            self._pen_intrinsic_n = [None] * self.env.num_envs
+            self._pen_cum_rot = [0] * self.env.num_envs
+            current_op = [None] * self.env.num_envs
+            current_count = [0] * self.env.num_envs
 
-            pre_pose = self.env.adjust_hand_pose.clone() 
-            pre_pose[:, 2] += self.env.gripper_length*2 
+            def _flush(env_id, success):
+                op = current_op[env_id]
+                cnt = current_count[env_id]
+                if op is None or cnt == 0:
+                    return
+                if op == "旋转笔盖":
+                    self._pen_attempt_chains[env_id].append(f"{cnt}x旋转笔盖")
+                    self._pen_stage_statuses[env_id].append(True)
+                else:
+                    self._pen_attempt_chains[env_id].append("向上提起笔盖")
+                    self._pen_stage_statuses[env_id].append(bool(success))
+                current_op[env_id] = None
+                current_count[env_id] = 0
+
+            pre_pose = self.env.adjust_hand_pose.clone()
+            pre_pose[:, 2] += self.env.gripper_length*2
             for i in range(3):
                 for j in range(10):
                     self.env.step(pre_pose)
-                
+                self._record_video_frame()
+
             # grasp the handle
             pre_pose[:, 2] -= self.env.gripper_length - 0.016
             for i in range(3):
                 for j in range(10):
                     self.env.step(pre_pose)
-            
+                self._record_video_frame()
+
             hand_pose = self.env.hand_rigid_body_tensor[:,:7]
 
             self.env.gripper = True
             for i in range(10):
                 self.env.step(hand_pose)
+            self._record_video_frame()
 
             '''
             set the env previous action to the current hand pose
             '''
             init_actions = self.action_process(hand_pose)
             self.env.actions = init_actions
+            # If any env is already release-ready before any rotation
+            # (rare in pen but possible if random_upper happens to be
+            # below 0.85x threshold by initialization), record N_min=0.
+            for env_id in range(self.env.num_envs):
+                if (
+                    bool(self.env.open_bottle_stage[env_id].item())
+                    and self._pen_intrinsic_n[env_id] is None
+                ):
+                    self._pen_intrinsic_n[env_id] = 0
             ##############start collect manipulation data############
             open_size = 0.015
-            rot_quat = torch.tensor([ 0, 0, -0.1305262, 0.9914449], device=self.env.device) 
+            rot_quat = torch.tensor([ 0, 0, -0.1305262, 0.9914449], device=self.env.device)
             s_rot_quat = torch.tensor([ 0, 0, 0.1305262, 0.9914449], device=self.env.device)
             rotate_dof = self.env.two_dof_tensor[:,0]
+            prev_op_for_env = [None] * self.env.num_envs
+            step_idx_for_env = [0] * self.env.num_envs
             for t in range(max_step):
                 cur_p = hand_pose[:, :3]
                 cur_q = hand_pose[:,3:7]
                 pre_p = cur_p.clone()
                 pre_q = cur_q.clone()
+                res_per_env = []
                 for i in range(self.env.num_envs):
                     if policy == "succ":
                         res = self.succ_policy(i)
@@ -253,13 +331,14 @@ class OpenPenManipulation(BaseManipulation) :
                         res = self.ada_policy(i, t, rotate_dof[i])
                     else:
                         raise NotImplementedError
+                    res_per_env.append(res)
                     if res == "z":
                         pre_p[i,2] += open_size
                     elif res == "o":
                         pre_q[i] = quat_mul(cur_q[i],rot_quat)
                     elif res == "r":
                         pre_q[i] = quat_mul(cur_q[i], s_rot_quat)
-                
+
                 pred_pose = torch.cat([pre_p, pre_q], dim=-1).float()
                 gt_pose = self.action_process(pred_pose)
 
@@ -268,24 +347,52 @@ class OpenPenManipulation(BaseManipulation) :
                         obs = self.env.collect_single_diff_data(env_id)
                         pc, env_state = obs_wrapper(obs)
                         eps_buffer[env_id].add(pc, env_state, gt_pose[env_id])
+                        op = "向上提起笔盖" if res_per_env[env_id] == "z" else "旋转笔盖"
+                        # Update per-env attempt-chain state machine: a change
+                        # in operation closes the current stage (failed,
+                        # because we wouldn't be looping if it had succeeded)
+                        # and starts a new one.
+                        if current_op[env_id] is None:
+                            current_op[env_id] = op
+                            current_count[env_id] = 1
+                        elif current_op[env_id] == op:
+                            current_count[env_id] += 1
+                        else:
+                            _flush(env_id, success=False)
+                            current_op[env_id] = op
+                            current_count[env_id] = 1
+                        step_idx_for_env[env_id] = len(self._pen_attempt_chains[env_id])
+                        prev_op_for_env[env_id] = op
+                        self.append_frame_label_for(env_id, step_idx_for_env[env_id], op)
 
                 for j in range(15):
                     self.env.step(pred_pose)
-                
+                self._record_video_frame()
+
                 self.env.actions = gt_pose
+                # Update intrinsic N tracking. Increment per-env cumulative
+                # rotation count for envs that just rotated, then snapshot
+                # ``open_bottle_stage`` which the env updates inside step()
+                # — first time it's True is the env-physics N_min.
+                for env_id in range(self.env.num_envs):
+                    if res_per_env[env_id] in ("r", "o"):
+                        self._pen_cum_rot[env_id] += 1
+                    if (
+                        bool(self.env.open_bottle_stage[env_id].item())
+                        and self._pen_intrinsic_n[env_id] is None
+                    ):
+                        self._pen_intrinsic_n[env_id] = int(self._pen_cum_rot[env_id])
                 # update env end flag
                 for env_id in range(self.env.num_envs):
                     if (torch.abs(self.env.one_dof_tensor[env_id, 0]) > 0.04).cpu().item() and not done_flag[env_id]:
+                        # Final stage caused success — flush with status=True.
+                        _flush(env_id, success=True)
                         demo_buffer.append(eps_buffer[env_id])
                         done_flag[env_id] = True
                         print(f"Env {env_id} Succeeded")
-        
-        if self.cfg['env']['collectData']:
-            dataset_path = "manip_pen"+"_"+self.cfg["task"]["policy"] + "_" + str(self.cfg["env"]["asset"]["AssetNum"])+"_eps"+str(self.cfg["task"]["num_episode"])+"_clock"+str(self.cfg["env"]["clockwise"])
-            save_dir = './demo_data/'+ dataset_path
-            save_path = save_dir + '/demo_data.zip'
-            os.makedirs(save_dir, exist_ok=True)
-            demo_buffer.save(save_path)
+            self.collect_episode_end(ctx, eps, done_flag)
+
+        self.collect_finalize(ctx, demo_buffer)
 
     def succ_policy(self, env_id):
         clock_wise = self.env.clock_wise[env_id]

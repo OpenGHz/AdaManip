@@ -231,19 +231,24 @@ class OpenSafeManipulation(BaseManipulation) :
         self.env.actions = action_with_gripper
         for env_id in range(self.env.num_envs):
             self.all_eps_buffer[env_id].add(pc[env_id], env_state[env_id],action_with_gripper[env_id])
-        
+            self.append_frame_label(env_id)
+        self._record_video_frame()
+
 
     def collect_manip_data(self):
         eps_num = self.cfg["task"]["num_episode"]
         policy = self.cfg["task"]["policy"]
-        rot_quat = torch.tensor([ 0, 0, -0.258819, 0.9659258], device=self.env.device) 
-        s_rot_quat = torch.tensor([ 0, 0, 0.258819, 0.9659258], device=self.env.device) 
+        rot_quat = torch.tensor([ 0, 0, -0.258819, 0.9659258], device=self.env.device)
+        s_rot_quat = torch.tensor([ 0, 0, 0.258819, 0.9659258], device=self.env.device)
 
+        # Unified-type task: no role suffix → dataset dir is `open_safe_<policy>_*`.
+        ctx = self.collect_setup(role=None)
         all_demo_buffer = Experience() # Save the continuous action trajectory in the whole episode
         for eps in range(eps_num):
             self.all_eps_buffer = [Episode_Buffer() for _ in range(self.env.num_envs)]
             print("eps_{}".format(eps+1))
             self.env.reset()
+            self.collect_episode_start(ctx, eps)
             # print(self.env.clock_wise)
             pose = self.env.get_adjust_hand_pose().clone()
             handle_pos = pose[:,:7]
@@ -525,13 +530,12 @@ class OpenSafeManipulation(BaseManipulation) :
                 for env_id in range(self.env.num_envs):
                     all_demo_buffer.append(self.all_eps_buffer[env_id])
                     print(f"Env {env_id} Succeeded")
+            done_flag = [
+                bool((torch.abs(self.env.one_dof_tensor[env_id, 0]) > np.pi / 6).cpu().item())
+                for env_id in range(self.env.num_envs)
+            ]
+            self.collect_episode_end(ctx, eps, done_flag)
 
-        if self.cfg['env']['collectData']:
-            dataset_path = "open_safe" + "_" + self.cfg["task"]["policy"] + "_" + str(self.cfg["env"]["asset"]["AssetNum"])+"_eps"+str(self.cfg["task"]["num_episode"])+"_clock"+str(self.cfg["env"]["clockwise"])
-            save_dir = './demo_data/'+ dataset_path 
-            save_path = save_dir + '/demo_data.zip'            
-            os.makedirs(save_dir, exist_ok=True)
-            all_demo_buffer.save(save_path)
-            print("Demo saved")
+        self.collect_finalize(ctx, all_demo_buffer)
 
 

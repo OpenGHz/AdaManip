@@ -138,6 +138,8 @@ AdaManip 的主训练数据存储在 zarr 文件中，通常为 `demo_data.zip`�
 
 ## 7. 轨迹级语言标注（双链）
 
+> 各 chain 字段的含义、计算流程、与训练 / 推理的关系详见 [`docs/design/chain_concepts.md`](chain_concepts.md)。本节只列 schema 字段定义。
+
 `trajectory_language.jsonl` 记录本次任务重每条轨迹的语言标注。每条轨迹必须保存两类链：
 
 1. `minimal_chain`
@@ -230,7 +232,85 @@ AdaManip 的主训练数据存储在 zarr 文件中，通常为 `demo_data.zip`�
 - 所有旋转阶段帧：`step_operation = "旋转瓶盖"`。
 - 所有提起阶段帧：`step_operation = "向上提起瓶盖"`。
 
-## 10. 最小验收标准
+## 10. `Nx` 任务的 N 范围由什么决定
+
+涉及 `Nx` 占位的 4 个任务（`bottle` / `pen` / `pressure_cooker` / `coffee_maker`）的 `N` 不是直接配置出来的，而是采集阶段每条 successful trajectory 实际跑完后落出来的事实。
+
+`minimal_chain` 中的 `Nx` 是 demo 跑完一条 trajectory 时 **整段累计**的旋转次数（`N_total = sum(K_i)`，`K_i` 是 attempt_chain 中第 `i` 段连续旋转的次数）。这一组 `N_total` 去重后即为 `expanded_minimal_chains` 中所有 `Nx 旋转... -> 向上提起...` 链的 N 值集合。详细的 chain 含义与计算流程见 [`docs/design/chain_concepts.md`](chain_concepts.md)。
+
+观察到的 `N_total` 受以下参数共同约束：
+
+### 10.1 下界：`try_range`（env 端）
+
+`open_<task>.py` 的 `ada_policy` 在 `|dof| < self.env.try_range` 时强制返回 `r` / `o`。`N_total` 至少要让 dof 跨过 `try_range` 才有可能让某次抬升真的成功开盖，所以下界粗略为：
+
+```
+N_total_min ≈ ceil(try_range / 单步 dof 推进量)
+```
+
+`try_range` 在 env 的 `__init__` 写死，按任务取值（以及推导）：
+
+| 任务 | `try_range` | 注释（env 源码原话） |
+|---|---|---|
+| `pen` | `0.99875` | `min random_range * open_stage_scale --> 2.35*0.5*0.85` |
+| `bottle` | `0.99875` | `min random_range * open_stage_scale --> 2.35*0.5*0.85` |
+| `pressure_cooker` | `0.35` | `min random_range * open_stage_scale --> 0.824*0.5*0.85` |
+| `coffee_maker` | `0.34` | `min random_range * open_stage_scale --> 0.8*0.5*0.85` |
+
+公式拆解：
+- `min random_range = (1 - limit_random) × upper_limit_from_urdf`，对应 `cfg.env.asset.limit_random`（4 个任务都是 `0.5`）和 URDF 里这一关节的最大角度。
+- `0.85` 是 demo 用的安全余量（`open_stage_scale`），写死在 env 的 `__init__` 里，不暴露到 cfg。
+
+“单步 dof 推进量”随任务不同：
+- `pen` / `bottle`：`r`/`o` 用 `quat_mul` 对夹爪施加 `±0.1305262 rad ≈ 15°` 的姿态增量，传到 cap dof 上一般 ≤ 15°，受抓取效率/打滑影响。
+- `pressure_cooker` / `coffee_maker`：`r` 用 `pre_p[i] ± rotate_dir[i] * step_size`（`step_size = 0.035 m` ≈ 切向位移 3.5 cm），handle 半径决定每步换算成多少弧度的 dof 推进。
+
+### 10.2 上界：`max_step`（manipulation 端）
+
+`collect_manip_data` 的最外层 `for t in range(max_step):` 是硬上界，每条 trajectory 最多执行 `max_step` 个动作，因此 `N_total ≤ max_step - 1`（成功 trajectory 的最后一步必须留给 `z`）。
+
+各任务 `max_step` 写死在 `manipulation/open_<task>.py` 里，按 `cfg.task.policy` 切换：
+
+| 任务 | `policy="adaptive"` | `policy="succ"` |
+|---|---|---|
+| `pen` | `30` | `25` |
+| `bottle` | `25` | `20` |
+| `pressure_cooker` | `25` | `20` |
+| `coffee_maker` | `20` | `15` |
+
+> 实测：`pen` 在当前参数下 `N_total` 通常落在 `12~19` 区间。低端（≈12–14）来自 demo 一上来就连转再抬一次成功的情况；高端（≈17–19）来自 demo 多次试错（rotate→fail-lift→rotate→fail-lift→…→succ-lift），最后累计旋转次数比 `N_total_min` 多出几次。
+
+### 10.3 中间：`ada_policy` 在 `|dof| ≥ try_range` 之后的随机继续
+
+`ada_policy` 走过 `try_range` 后改为按经验先验采样：上一拍是 `z` 但 `open_bottle_stage` 仍为 False，则继续 `r`/`o`；上一拍是 `r`/`o`，以 `prob = 11/20` 切到 `z`，否则继续 `r`/`o`。这条分支让 `N_total` 在 `N_total_min` 之上还会再加 0~若干次旋转（来自重试），所以同一任务下 `expanded_minimal_chains` 通常是几个相近 `Nx` 值组成的离散集合。
+
+### 10.4 想要采集到更宽 / 更窄的 N 分布该改哪里
+
+| 想要的效果 | 改动点 |
+|---|---|
+| 让 `N_total_min` 更小 | env 端调小 `try_range`（直接改源码的字面量），或调大 `cfg.env.asset.limit_random`（让 URDF 上限随机区间更靠近 0）。 |
+| 让 `N_total_min` 更大 | 反向，调大 `try_range` 或调小 `limit_random`。 |
+| 让 `N_total` 分布更集中（少重试加成） | 把 `ada_policy` 走过 `try_range` 之后的 `prob = 11/20` 调高（越快切 `z` 越倾向首试就成功），同时加大单次 `z` 的位移幅度（`open_size`）让单次抬升更易顶开 cap。两者都会减少重试次数。 |
+| 让 `N_total` 上界更大 | manipulation 端调大 `collect_manip_data` 里的 `max_step`（不要忘了 `cfg.env.horizon` 也要 ≥ `max_step`，否则 `action_chosen` 写超界）。 |
+| 想要 `clock_wise == 0`（直接 `["向上提起..."]`）的 trajectory | `cfg.env.clockwise` 是新 env 中 `use_clockwise=True` 的概率（`pen`/`bottle` 默认 `0.5`、`coffee_maker` 是 `1.0` 即始终需要旋转、`pressure_cooker` 是 `0.0` 即从不旋转）。 |
+
+cfg 里和这些参数相关的字段汇总：
+
+```yaml
+task:
+  num_episode: 20      # rollout 次数；每次产出 ≤ num_envs 条 trajectory
+  policy: adaptive     # adaptive / succ；决定 max_step
+env:
+  numEnvs: 10          # 并行环境数
+  horizon: 35          # action_chosen 缓冲长度，必须 ≥ max_step
+  clockwise: 0.5       # 单 env 抽到 clock_wise=1 的概率
+  asset:
+    limit_random: 0.5  # 关节随机区间宽度系数
+```
+
+`try_range`、`open_stage_scale=0.85`、`max_step` 是 demo 实现细节，目前没有暴露成 cfg；若要做超参扫，请修改对应的 `envs/open_<task>.py` 与 `manipulation/open_<task>.py`。
+
+## 11. 最小验收标准
 
 1. 数据目录中存在 `language_expanded.json`。
 2. `trajectory_language.jsonl` 每条轨迹同时包含 `minimal_chain_id`、`minimal_chain`、`attempt_chain`、`stage_status`、`command_chains`、`command_chain_ids`。

@@ -29,7 +29,7 @@ class OpenMicroWaveManipulation(BaseManipulation):
     # Door is locked when ``clock_wise == 1``; canonical answer is the
     # button-then-pull chain. ``clock_wise == 0`` means the door pulls open
     # directly. Used by ``canonical_minimal_chain_for_state`` and the
-    # ``_build_microwave_trajectory_label`` demo logic.
+    # ``concrete_attempt_chain_for_collect`` override.
     _LOCKED_CHAIN: List[str] = ["按按钮", "拉门"]
     _UNLOCKED_CHAIN: List[str] = ["拉门"]
 
@@ -84,48 +84,27 @@ class OpenMicroWaveManipulation(BaseManipulation):
             "final_open_dof": float(self.env.one_dof_tensor[env_id, 0].item()),
         }
 
-    # ------------------------------------------------------------------
-    # Microwave demonstration helpers
-    # ------------------------------------------------------------------
-
-    def _build_microwave_trajectory_label(self, env_id, start_with_pull, expanded_minimal_chains):
-        clock_wise = int(self.env.clock_wise[env_id].item())
+    def concrete_attempt_chain_for_collect(self, env_id: int, state: Dict[str, Any]):
+        # Microwave's demo policy is deterministic given (start_with_pull, cw):
+        #   - start_with_pull=True, cw=0  → ["拉门"]                   succeeds in one step
+        #   - start_with_pull=True, cw=1  → ["拉门", "按按钮", "拉门"]  first pull fails, then button, then pull
+        #   - start_with_pull=False, cw=0 → ["按按钮", "拉门"]          button is wasted but pull succeeds
+        #   - start_with_pull=False, cw=1 → ["按按钮", "拉门"]          button needed, pull succeeds
+        # Status convention: rotate/intermediate stages = True; lift stages
+        # = True iff the lift caused success. The "succeed in one step"
+        # cases mark their single stage True per "successful trajectory's
+        # last stage_status must be True".
+        start_with_pull = getattr(self, "_microwave_start_with_pull", None)
+        if state is None or start_with_pull is None:
+            return super().concrete_attempt_chain_for_collect(env_id, state)
+        cw = int(round(float(state.get("clock_wise", 0))))
         if start_with_pull:
-            if clock_wise == 0:
-                attempt_chain = list(self._UNLOCKED_CHAIN)
-                stage_status = [True]
-                minimal_chain = list(self._UNLOCKED_CHAIN)
+            if cw == 0:
+                return list(self._UNLOCKED_CHAIN), [True]
             else:
-                attempt_chain = ["拉门", "按按钮", "拉门"]
-                stage_status = [False, True, True]
-                minimal_chain = list(self._LOCKED_CHAIN)
+                return ["拉门", "按按钮", "拉门"], [False, True, True]
         else:
-            attempt_chain = list(self._LOCKED_CHAIN)
-            stage_status = [True, True]
-            minimal_chain = list(self._LOCKED_CHAIN)
-
-        try:
-            minimal_chain_id = expanded_minimal_chains.index(minimal_chain)
-        except ValueError as exc:
-            raise RuntimeError(
-                f"minimal_chain {minimal_chain} not found in expanded_minimal_chains"
-            ) from exc
-
-        command_chains, command_chain_ids = self.match_command_chains(
-            attempt_chain=attempt_chain,
-            stage_status=stage_status,
-            expanded_minimal_chains=expanded_minimal_chains,
-        )
-
-        return {
-            "minimal_chain_id": minimal_chain_id,
-            "minimal_chain": minimal_chain,
-            "attempt_chain": attempt_chain,
-            "stage_status": stage_status,
-            "command_chains": command_chains,
-            "command_chain_ids": command_chain_ids,
-            "success": True,
-        }
+            return list(self._LOCKED_CHAIN), [True, True]
 
     def test_env(self, pose, eval=False):
         batch_size = pose.shape[0]
@@ -221,36 +200,27 @@ class OpenMicroWaveManipulation(BaseManipulation):
     def collect_manip_data(self):
         eps_num = self.cfg["task"]["num_episode"]
         policy = self.cfg["task"]["policy"]
-        template_path, task_spec = self.load_task_language_template(
-            self.language_template_task_name()
-        )
-        expanded_minimal_chains = self.build_expanded_minimal_chains(task_spec["minimal_chains"])
-
+        ctx = self.collect_setup(role=None)
         demo_buffer = Experience()
-        trajectory_records = []
-        frame_records = []
-        saved_episode_id = 0
-
-        save_dir = self._build_collect_save_dir()
-        self._prepare_save_dir(save_dir, "Collection")
-        self._init_video_recorder(save_dir)
         for eps in range(eps_num):
             self.eps_buffer = [Episode_Buffer() for _ in range(self.env.num_envs)]
-            self.init_episode_frame_records(self.env.num_envs)
+            done_flag = [False] * self.env.num_envs
             print("eps_{}".format(eps + 1))
             self.env.reset()
-            if self.video_recorder is not None:
-                self.video_recorder.start_episode(eps)
+            self.collect_episode_start(ctx, eps)
             ori_pose = self.env.get_adjust_hand_pose()
             pose = ori_pose.clone()
             handle_pos = pose[:, :7].clone()
             button_pos = pose[:, 7:].clone()
             self.env.gripper = torch.zeros((self.env.num_envs, 1), device=self.env.device)
-            episode_start_with_pull = False
+            # ``_microwave_start_with_pull`` is read by
+            # ``concrete_attempt_chain_for_collect`` at episode-end to build
+            # the per-env attempt_chain / stage_status.
+            self._microwave_start_with_pull = False
             try:
                 if policy == "succ":
                     if self.env.clock_wise[0] == 1:
-                        episode_start_with_pull = False
+                        self._microwave_start_with_pull = False
                         self.set_current_step(0, "按按钮")
                         button_pos[:, 0] += self.env.gripper_length * 2 + 0.012
                         for i in range(2):
@@ -302,7 +272,7 @@ class OpenMicroWaveManipulation(BaseManipulation):
                             for j in range(15):
                                 self.env.step(pred_pose)
                     else:
-                        episode_start_with_pull = True
+                        self._microwave_start_with_pull = True
                         self.set_current_step(0, "拉门")
                         handle_pos[:, 0] += self.env.gripper_length * 2
                         for i in range(2):
@@ -335,7 +305,7 @@ class OpenMicroWaveManipulation(BaseManipulation):
                     down_q = torch.stack(self.env.num_envs * [torch.tensor([0.7071068, 0.7071068, 0, 0])]).to(self.env.device).view((self.env.num_envs, 4))
                     step_size = 0.045
                     start_with_pull = np.random.rand() < 0.5
-                    episode_start_with_pull = start_with_pull
+                    self._microwave_start_with_pull = start_with_pull
 
                     if start_with_pull:
                         self.set_current_step(0, "拉门")
@@ -452,42 +422,16 @@ class OpenMicroWaveManipulation(BaseManipulation):
                 for env_id in range(self.env.num_envs):
                     if self.task_success_for_env(env_id):
                         demo_buffer.append(self.eps_buffer[env_id])
-                        traj_record = self._build_microwave_trajectory_label(
-                            env_id=env_id,
-                            start_with_pull=episode_start_with_pull,
-                            expanded_minimal_chains=expanded_minimal_chains,
-                        )
-                        traj_record["episode_id"] = saved_episode_id
-                        traj_record["round_idx"] = eps
-                        traj_record["env_id"] = env_id
-                        frame_start = len(frame_records)
-                        env_frames = self._episode_frame_records[env_id]
-                        frame_records.extend(env_frames)
-                        frame_end = len(frame_records)
-                        traj_record["frame_range"] = [frame_start, frame_end]
-                        trajectory_records.append(traj_record)
-                        saved_episode_id += 1
+                        done_flag[env_id] = True
                         print(f"Env {env_id} Succeeded")
             finally:
-                if self.video_recorder is not None:
-                    self.video_recorder.finish_episode()
-                self.clear_episode_frame_records()
-
-        if self.cfg["env"]["collectData"]:
-            import os
-            save_path = save_dir + "/demo_data.zip"
-            os.makedirs(save_dir, exist_ok=True)
-            demo_buffer.save(save_path)
-            self.save_language_sidecars(
-                save_dir=save_dir,
-                template_path=template_path,
-                task_name=self.language_template_task_name(),
-                task_spec=task_spec,
-                expanded_minimal_chains=expanded_minimal_chains,
-                trajectory_records=trajectory_records,
-                frame_records=frame_records,
-            )
-        self.video_recorder = None
+                # ``collect_episode_end`` walks done_flag to build per-env
+                # trajectory_records (driven by ``concrete_attempt_chain_for_collect``
+                # for attempt_chain/stage_status, and ``ground_truth_chain_for_collect``
+                # for the env-state-derived optimal). minimal_chain is
+                # extracted from attempt_chain inside collect_episode_end.
+                self.collect_episode_end(ctx, eps, done_flag)
+        self.collect_finalize(ctx, demo_buffer)
 
     def action_choose(self, t, index, one_motion, two_motion):
         if "r" in self.env.action_chosen[index]:

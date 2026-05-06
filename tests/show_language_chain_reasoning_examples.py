@@ -26,12 +26,111 @@ if str(ADA_MANIP_ROOT) not in sys.path:
     sys.path.insert(0, str(ADA_MANIP_ROOT))
 
 from manipulation.language_chain_utils import (  # noqa: E402
+    extract_minimal_chain_from_attempt,
     infer_attempt_chain,
     infer_reasonable_prediction_chains,
     rank_expanded_minimal_chain_ids,
     score_language_chain_for_inference,
     sort_expanded_minimal_chains_by_inference_priority,
 )
+
+
+# Hand-crafted (attempt_chain, stage_status, expected_minimal, comment)
+# tuples covering the representative cases. ``expected_minimal`` documents
+# the user-defined contract for the aggregate rule; the script prints both
+# expected and actual so any drift is visible immediately.
+EXTRACT_MINIMAL_CHAIN_EXAMPLES = [
+    (
+        ["拉门"],
+        [True],
+        ["拉门"],
+        "microwave / cw=0 demo: 一次性拉门成功",
+    ),
+    (
+        ["按按钮", "拉门"],
+        [True, True],
+        ["按按钮", "拉门"],
+        "microwave / start_with_pull=False: 按按钮+拉门，没失败 → minimal == attempt"
+        "（cw=0 时按按钮其实多余，但 attempt 视角看不出来——只在 ground_truth_chain 里反映）",
+    ),
+    (
+        ["拉门", "按按钮", "拉门"],
+        [False, True, True],
+        ["按按钮", "拉门"],
+        "microwave / cw=1, start_with_pull=True: 先误拉门(失败) → 按按钮 → 拉门(成功)",
+    ),
+    (
+        ["1x旋转瓶盖", "向上提起瓶盖", "1x旋转瓶盖", "向上提起瓶盖"],
+        [True, False, True, True],
+        ["2x旋转瓶盖", "向上提起瓶盖"],
+        "bottle: 1x rotate, lift fail, 再 1x rotate, lift succ。"
+        "丢失败 lift → [1x, 1x, lift] → 合并相邻 Nx → [2x, lift]。"
+        "（这与 data_collection.md §7 的示例 minimal=[1x旋转瓶盖, 向上提起瓶盖] 不一致，"
+        "doc 中那个 1x 写错了 N，应当为 2x。）",
+    ),
+    (
+        [
+            "9x旋转笔盖", "向上提起笔盖",
+            "1x旋转笔盖", "向上提起笔盖",
+            "5x旋转笔盖", "向上提起笔盖",
+        ],
+        [True, False, True, False, True, True],
+        ["15x旋转笔盖", "向上提起笔盖"],
+        "pen: 9x→fail→1x→fail→5x→succ。"
+        "丢两次失败 lift → [9x, 1x, 5x, lift] → 合并相邻 Nx → [15x, lift]",
+    ),
+    (
+        ["12x旋转笔盖", "向上提起笔盖"],
+        [True, True],
+        ["12x旋转笔盖", "向上提起笔盖"],
+        "pen: 一次成功 → minimal == attempt",
+    ),
+    (
+        ["顺时针旋转把手", "拉开门"],
+        [True, True],
+        ["顺时针旋转把手", "拉开门"],
+        "door: 一次成功 → minimal == attempt",
+    ),
+    (
+        ["向上提起笔盖", "9x旋转笔盖", "向上提起笔盖"],
+        [False, True, True],
+        ["9x旋转笔盖", "向上提起笔盖"],
+        "pen: 起手错误（直接抬升失败）→ 转 9x → lift 成功。"
+        "丢首段失败 lift → [9x, lift]，无相邻 Nx 可合并",
+    ),
+    (
+        ["1x旋转笔盖", "1x旋转笔盖", "1x旋转笔盖", "向上提起笔盖"],
+        [True, True, True, True],
+        ["3x旋转笔盖", "向上提起笔盖"],
+        "pen 假想：连续 3 段独立 1x rotate 都成功 → 合并为 3x。"
+        "（实际 demo 不会拆这么细；构造此例验证合并规则）",
+    ),
+    (
+        ["按按钮", "按按钮", "拉门"],
+        [True, True, True],
+        ["按按钮", "拉门"],
+        "microwave 假想：相邻同一个非 Nx stage 重复 → 去重。"
+        "（实际 demo 不会出现这种 attempt；用例只是测合并规则的边界）",
+    ),
+]
+
+
+def print_extract_minimal_chain_examples() -> None:
+    print("=" * 100)
+    print("extract_minimal_chain_from_attempt examples")
+    print("rule: 1) drop stages where stage_status is False; "
+          "2) merge consecutive same-op stages "
+          "(Nx: sum counts; non-Nx: dedup adjacent)")
+    print("=" * 100)
+    for attempt, status, expected, comment in EXTRACT_MINIMAL_CHAIN_EXAMPLES:
+        actual = extract_minimal_chain_from_attempt(attempt, status)
+        ok = "✓" if actual == expected else "✗"
+        print(f"  {ok} {comment}")
+        print(f"    attempt : {format_chain(attempt)}")
+        print(f"    status  : {status}")
+        print(f"    expected: {format_chain(expected)}")
+        print(f"    actual  : {format_chain(actual)}")
+        print()
 
 
 NX_STAGE_RE = re.compile(r"^\s*Nx(.+?)\s*$")
@@ -181,6 +280,8 @@ def main() -> None:
 
     if args.max_repeat < 1:
         raise ValueError("--max-repeat must be >= 1")
+
+    print_extract_minimal_chain_examples()
 
     with args.template.open("r", encoding="utf-8") as f:
         template = json.load(f)

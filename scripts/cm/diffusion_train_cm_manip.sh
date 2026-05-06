@@ -1,1 +1,1 @@
-python diffusion_train.py --dataset_path ./demo_data/manip_cm_adaptive_7_eps20_clock1.0/demo_data.zip --batch_size 64 --num_epochs 800 --obs_horizon 2
+python diffusion_train.py --dataset_path ./demo_data/open_coffeemachine_manip_adaptive_7_eps20_clock1.0/demo_data.zip --batch_size 64 --num_epochs 800 --obs_horizon 2

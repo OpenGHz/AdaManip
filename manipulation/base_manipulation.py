@@ -33,6 +33,7 @@ import av
 
 from dataset.dataset import obs_wrapper
 from manipulation.language_chain_utils import (
+    extract_minimal_chain_from_attempt,
     infer_reasonable_prediction_chains,
     rank_expanded_minimal_chain_ids,
     score_language_chain_for_inference,
@@ -200,6 +201,86 @@ class BaseManipulation:
         self._episode_frame_records = None
         self.video_recorder = None
 
+    # ----- Shared logging / fallback helpers -----
+
+    def get_logger(self) -> Optional[Logger]:
+        """Return the attached ``logging.Logger``, or ``None`` if never
+        set. Wraps ``getattr(self, "logger", None)`` so subclasses don't
+        have to defensively check the attribute."""
+        return getattr(self, "logger", None)
+
+    def warn_banner(self, message: str) -> None:
+        """Print ``message`` wrapped in a hard-to-miss banner of ``!`` to
+        stdout AND log it via ``self.logger.warning`` (when present).
+
+        Used for code paths that **should not normally fire** but still
+        need to return something instead of raising — e.g. ground_truth
+        fallback when a task-specific intrinsic-N tracker is missing.
+        Loud by design so an operator running collect interactively
+        immediately notices the unexpected condition.
+        """
+        bar = "!" * 100
+        print(bar, flush=True)
+        print(message, flush=True)
+        print(bar, flush=True)
+        logger = self.get_logger()
+        if logger is not None:
+            logger.warning(message)
+
+    def ground_truth_chain_from_intrinsic_n(
+        self,
+        env_id: int,
+        state: Dict[str, Any],
+        n_min_attr: str,
+        rotate_op: str,
+        lift_op: str,
+        success_hint: str,
+    ) -> Optional[List[str]]:
+        """Shared body for the Nx-task ``ground_truth_chain_for_collect``
+        overrides (pen / bottle / pc / cm). Reads
+        ``getattr(self, n_min_attr)[env_id]`` (the per-env N_min recorded
+        by ``collect_manip_data`` from the env's ``open_bottle_stage``
+        flip-point) and builds the chain accordingly:
+
+        - ``N_min == 0`` → ``[lift_op]``.
+        - ``N_min > 0``  → ``[f"{N_min}x{rotate_op}", lift_op]``.
+        - ``N_min`` missing or ``None`` → loud-warn fallback to
+          ``canonical_minimal_chain_for_state(state)``.
+
+        ``success_hint`` is appended to the warning text so each task can
+        say what "the demo should have done" (e.g. "opened the cap" /
+        "pulled the handle"). Should not fire on a successful collect
+        trajectory — only on edge cases like calling outside
+        ``collect_manip_data`` or bugs that leave the tracker un-updated.
+        """
+        n_min_list = getattr(self, n_min_attr, None)
+        if (
+            n_min_list is not None
+            and env_id < len(n_min_list)
+            and n_min_list[env_id] is not None
+        ):
+            if int(n_min_list[env_id]) == 0:
+                return [lift_op]
+            return [f"{int(n_min_list[env_id])}x{rotate_op}", lift_op]
+        if n_min_list is None:
+            reason = f"{n_min_attr} is None (collect_manip_data did not initialize it)"
+        elif env_id >= len(n_min_list):
+            reason = (
+                f"env_id={env_id} out of range for {n_min_attr} "
+                f"(len={len(n_min_list)})"
+            )
+        else:
+            reason = (
+                f"{n_min_attr}[{env_id}]=None "
+                f"(open_bottle_stage never flipped True during this trajectory)"
+            )
+        self.warn_banner(
+            f"[GROUND_TRUTH FALLBACK] {type(self).__name__}: env_id={env_id} "
+            f"({reason}); falling back to canonical_minimal_chain_for_state "
+            f"(literal Nx). Verify the demo actually {success_hint}."
+        )
+        return self.canonical_minimal_chain_for_state(state)
+
     # ----- Existing language template / chain helpers (preserved) -----
 
     def get_language_template_path(self):
@@ -276,12 +357,107 @@ class BaseManipulation:
             "step_operation": self._current_step_operation,
         })
 
+    def append_frame_label_for(self, env_id: int, step_index: int, step_operation: str) -> None:
+        # Per-env variant for tasks where each env has its own step sequence
+        # (pen / bottle / pc / cm with adaptive Nx rotations).
+        if self._episode_frame_records is None:
+            return
+        self._episode_frame_records[env_id].append({
+            "step_index": int(step_index),
+            "step_operation": str(step_operation),
+        })
+
+    def concrete_attempt_chain_for_collect(
+        self, env_id: int, episode_state: Dict[str, Any]
+    ) -> Optional[tuple]:
+        # Return (attempt_chain, stage_status) for env_id. Default = the
+        # trivial single-attempt case (attempt_chain == canonical, all
+        # stages True). Override for tasks with multi-attempt demos
+        # (pen / bottle / pc / cm with retry-on-failed-lift).
+        canonical = self.canonical_minimal_chain_for_state(episode_state)
+        if canonical is None:
+            return None
+        return list(canonical), [True] * max(len(canonical), 1)
+
+    def ground_truth_chain_for_collect(
+        self, env_id: int, episode_state: Dict[str, Any]
+    ) -> Optional[List[str]]:
+        # The "god's-eye-view" optimal chain for this trajectory's env state,
+        # independent of what the demo actually executed. Default falls back
+        # to ``canonical_minimal_chain_for_state(state)``: for non-Nx tasks
+        # (microwave / door / safe / window / lamp) that's the canonical
+        # cw-keyed chain. Nx tasks (pen / bottle / pc / cm) override to fill
+        # in the concrete N from demo state (total rotations needed).
+        return self.canonical_minimal_chain_for_state(episode_state)
+
+    def _build_full_minimal_chain_bank(self, observed_chains, trajectory_records=None):
+        """Expand the observed Nx chains into a contiguous 1..N_max range so
+        that the schema's strict prefix-matching for ``command_chains`` always
+        succeeds — even when a trajectory's first-failure prefix involves an
+        intermediate N value that no env happened to terminate with as its
+        minimal_chain.
+
+        Default behavior:
+        - Non-Nx chains (length != 2 or first stage doesn't match ``\\d+x``)
+          are kept as-is, in observed order.
+        - Each (rotation_op_root, lift_op) pair found gets expanded to
+          ``[["1x{op}", lift], ..., ["{N_max}x{op}", lift]]``.
+        - When ``trajectory_records`` is provided, ``N_max`` also accounts
+          for Nx counts appearing anywhere in any trajectory's
+          ``attempt_chain`` (not only in its ``minimal_chain``). This is
+          required for command_chains' prefix matching since the
+          first-failure prefix can have a different N than the suffix-
+          extracted minimal_chain.
+
+        Tasks can override to cap or pad N_max with task-specific knowledge
+        (e.g., a ceiling derived from env physics)."""
+        import re
+        nx_pattern = re.compile(r"^(\d+)x(.+)$")
+
+        non_nx_chains = []
+        nx_max_by_op = {}  # (op_root, lift_op) -> max N observed
+        nx_op_order = []   # preserve insertion order for determinism
+
+        def _track_nx(op_root, lift, n):
+            key = (op_root, lift)
+            if key not in nx_max_by_op:
+                nx_op_order.append(key)
+                nx_max_by_op[key] = n
+            else:
+                nx_max_by_op[key] = max(nx_max_by_op[key], n)
+
+        for chain in observed_chains:
+            chain = list(chain)
+            if len(chain) == 2 and nx_pattern.match(str(chain[0])):
+                m = nx_pattern.match(str(chain[0]))
+                _track_nx(m.group(2), chain[1], int(m.group(1)))
+            else:
+                if chain not in non_nx_chains:
+                    non_nx_chains.append(chain)
+
+        if trajectory_records is not None:
+            for record in trajectory_records:
+                attempt = record.get("attempt_chain") or []
+                for i in range(len(attempt) - 1):
+                    m = nx_pattern.match(str(attempt[i]))
+                    if m and not nx_pattern.match(str(attempt[i + 1])):
+                        _track_nx(m.group(2), attempt[i + 1], int(m.group(1)))
+
+        full_bank = list(non_nx_chains)
+        for key in nx_op_order:
+            op_root, lift = key
+            n_max = nx_max_by_op[key]
+            for i in range(1, n_max + 1):
+                full_bank.append([f"{i}x{op_root}", lift])
+        return full_bank
+
     def save_language_sidecars(self,
                                save_dir,
                                template_path,
                                task_name,
                                task_spec,
                                expanded_minimal_chains,
+                               expanded_actual_minimal_chains,
                                trajectory_records,
                                frame_records):
         relative_template_path = self.relative_path_from(template_path, save_dir)
@@ -312,6 +488,7 @@ class BaseManipulation:
             "command": task_spec["command"],
             "operation_set": task_spec["operation_set"],
             "expanded_minimal_chains": expanded_minimal_chains,
+            "expanded_actual_minimal_chains": expanded_actual_minimal_chains,
             "attempt_chain_counts": attempt_chain_counts,
         }
         for prompt_key in ("additional_prompt", "success_check_additional_prompt"):
@@ -507,20 +684,29 @@ class BaseManipulation:
     # Save dirs
     # =====================================================================
 
-    def _build_dir_name(self, prefix: str) -> str:
-        parts = [
-            f"{prefix}{self.task_name()}",
+    def _build_dir_name(self, prefix: str, role: Optional[str] = None) -> str:
+        parts = [f"{prefix}{self.task_name()}"]
+        if role:
+            parts.append(role)
+        parts.extend([
             self.cfg["task"]["policy"],
             str(self.cfg["env"]["asset"]["AssetNum"]),
             f"eps{self.cfg['task']['num_episode']}",
-        ]
+        ])
         suffix = self.dataset_dir_suffix()
         if suffix:
             parts.append(suffix)
         return "_".join(parts)
 
-    def _build_collect_save_dir(self):
-        return "./demo_data/" + self._build_dir_name(prefix="")
+    def _build_collect_save_dir(self, role: Optional[str] = None):
+        """Build the demo_data/<dataset> directory for data collection.
+
+        ``role`` is "manip" or "grasp" for tasks that split data collection
+        into two phases (door, lamp, bottle, pen, pc, cm, window). Unified-type
+        tasks (microwave, safe) pass ``None``, producing the historical
+        ``open_<task>_<policy>_*`` naming.
+        """
+        return "./demo_data/" + self._build_dir_name(prefix="", role=role)
 
     def _build_eval_save_dir(self):
         run_ts = time.strftime("%Y%m%d-%H%M%S", time.localtime())
@@ -1076,6 +1262,226 @@ class BaseManipulation:
             self.eps_buffer[env_id].add(pc[env_id], env_state[env_id], action_with_gripper[env_id])
             self.append_frame_label(env_id)
         self._record_video_frame()
+
+    # =====================================================================
+    # Collection lifecycle helpers (used by subclasses' collect_*_data).
+    # Wraps save-dir construction, video recorder init, language sidecar
+    # writing so each task only adds task-specific demo policy code.
+    # =====================================================================
+
+    def collect_setup(self, role: Optional[str] = None) -> Dict[str, Any]:
+        """Initialize a collection run: build save dir, prep recorder + sidecar buffers.
+
+        Returns a context dict with the keys subclasses need: ``save_dir``,
+        ``template_path``, ``task_spec``, ``expanded_minimal_chains``,
+        ``trajectory_records``, ``frame_records``, ``saved_episode_id`` (a
+        single-element mutable list used as a counter), and ``role``.
+        """
+        template_path, task_spec = self.load_task_language_template(
+            self.language_template_task_name()
+        )
+        expanded_minimal_chains = self.build_expanded_minimal_chains(
+            task_spec["minimal_chains"]
+        )
+        save_dir = self._build_collect_save_dir(role=role)
+        self._prepare_save_dir(save_dir, "Collection")
+        self._init_video_recorder(save_dir)
+        return {
+            "save_dir": save_dir,
+            "template_path": template_path,
+            "task_spec": task_spec,
+            "expanded_minimal_chains": expanded_minimal_chains,
+            "trajectory_records": [],
+            "frame_records": [],
+            "saved_episode_id": [0],
+            "role": role,
+        }
+
+    def collect_episode_start(self, ctx: Dict[str, Any], eps: int) -> None:
+        """Begin one episode: open video writer + reset frame label tracker."""
+        if self.video_recorder is not None:
+            self.video_recorder.start_episode(eps)
+            self._record_video_frame()
+        self.init_episode_frame_records(self.env.num_envs)
+
+    def collect_episode_end(
+        self,
+        ctx: Dict[str, Any],
+        eps: int,
+        done_flag: List[bool],
+    ) -> None:
+        """Finalize one episode: emit per-(env, episode) trajectory_record using
+        ``canonical_minimal_chain_for_state`` for each successful env, close the
+        video writer, and clear per-episode frame records.
+
+        Does NOT mutate ``demo_buffer`` — each subclass owns its append logic
+        (e.g., per-success append vs. end-of-episode append).
+        """
+        states = self.capture_per_env_episode_state()
+        expanded_minimal_chains = ctx.get("expanded_minimal_chains") or []
+        for env_id, ok in enumerate(done_flag):
+            if not ok:
+                continue
+            attempt = self.concrete_attempt_chain_for_collect(env_id, states[env_id])
+            attempt_chain, stage_status = attempt if attempt else ([], [])
+            attempt_chain = list(attempt_chain)
+            stage_status = list(stage_status)
+            # minimal_chain = the simplest reduction of attempt_chain (drop
+            # every stage up to and including the last failure). Pure
+            # attempt-derived; for env-state-derived optimal see
+            # ground_truth_chain below.
+            minimal_chain = (
+                extract_minimal_chain_from_attempt(attempt_chain, stage_status)
+                if attempt_chain
+                else []
+            )
+            # ground_truth_chain: env-state-derived optimal (cw-keyed for
+            # non-Nx tasks; total-N for Nx tasks). Independent of how the
+            # demo actually unfolded.
+            ground_truth_chain = self.ground_truth_chain_for_collect(
+                env_id, states[env_id]
+            ) or []
+            ground_truth_chain = list(ground_truth_chain)
+            # Add minimal_chain to the bank if not already there. Abstract Nx
+            # chains in the bank get filtered out in collect_finalize.
+            if minimal_chain and minimal_chain not in expanded_minimal_chains:
+                expanded_minimal_chains.append(list(minimal_chain))
+            try:
+                mc_id = (
+                    expanded_minimal_chains.index(minimal_chain)
+                    if minimal_chain and minimal_chain in expanded_minimal_chains
+                    else None
+                )
+            except ValueError:
+                mc_id = None
+            # command_chains: try strict prefix match per schema §7. If no
+            # bank chain starts with the prefix (common for stochastic demos
+            # where the first failure came after a partial rotation phase
+            # that doesn't match any total-N chain), fall back to
+            # [minimal_chain] — the env's own optimal chain is always a
+            # valid command interpretation.
+            command_chains, command_chain_ids = [], []
+            if minimal_chain:
+                try:
+                    command_chains, command_chain_ids = self.match_command_chains(
+                        attempt_chain=attempt_chain,
+                        stage_status=stage_status,
+                        expanded_minimal_chains=expanded_minimal_chains,
+                    )
+                except RuntimeError:
+                    command_chains = [list(minimal_chain)]
+                    command_chain_ids = [int(mc_id)] if mc_id is not None else []
+            frame_start = len(ctx["frame_records"])
+            env_frames = (
+                self._episode_frame_records[env_id]
+                if self._episode_frame_records is not None and env_id < len(self._episode_frame_records)
+                else []
+            )
+            ctx["frame_records"].extend(env_frames)
+            frame_end = len(ctx["frame_records"])
+            traj_record = {
+                "minimal_chain_id": int(mc_id) if mc_id is not None else None,
+                "minimal_chain": list(minimal_chain),
+                "ground_truth_chain": list(ground_truth_chain),
+                "attempt_chain": attempt_chain,
+                "stage_status": stage_status,
+                "command_chains": [list(c) for c in command_chains],
+                "command_chain_ids": [int(cid) for cid in command_chain_ids],
+                "success": True,
+                "episode_id": int(ctx["saved_episode_id"][0]),
+                "round_idx": int(eps),
+                "env_id": int(env_id),
+                "frame_range": [frame_start, frame_end],
+            }
+            ctx["trajectory_records"].append(traj_record)
+            ctx["saved_episode_id"][0] += 1
+        if self.video_recorder is not None:
+            self.video_recorder.finish_episode()
+        self.clear_episode_frame_records()
+
+    def collect_finalize(self, ctx: Dict[str, Any], demo_buffer: Any) -> None:
+        """Close out a collection run: write demo_data.zip + language sidecars.
+
+        Two banks are written to language_expanded.json:
+        - ``expanded_actual_minimal_chains``: chains actually observed in this
+          collection run (Nx-abstract entries from the template are filtered out).
+        - ``expanded_minimal_chains``: the actual bank force-expanded so that
+          every Nx operation's count covers the full ``1..N_max`` range. This
+          guarantees the schema's strict prefix-matching for ``command_chains``
+          always finds a hit (even when a trajectory's first-failure prefix
+          uses an intermediate N value that no env happened to terminate with).
+        """
+        if self.cfg["env"].get("collectData", False):
+            os.makedirs(ctx["save_dir"], exist_ok=True)
+            save_path = os.path.join(ctx["save_dir"], "demo_data.zip")
+            demo_buffer.save(save_path)
+            # Filter abstract Nx-placeholder chains (from template) — bank only
+            # holds concrete chains.
+            expanded_actual_minimal_chains = [
+                list(chain)
+                for chain in ctx["expanded_minimal_chains"]
+                if not any("Nx" in str(stage) for stage in chain)
+            ]
+            # Force-expand to full 1..N_max range. Trajectory chain-id lookups
+            # below MUST be against this bank because that's what gets written
+            # to language_expanded.json (and what preprocess will encode).
+            # Pass trajectory_records so that N_max also covers Nx counts that
+            # appear in attempt_chain prefixes (needed for command_chains
+            # prefix matching when prefix's N differs from minimal_chain's N).
+            expanded_minimal_chains = self._build_full_minimal_chain_bank(
+                expanded_actual_minimal_chains,
+                trajectory_records=ctx["trajectory_records"],
+            )
+
+            # Recompute trajectory chain ids + command_chains against the
+            # final full bank.
+            for record in ctx["trajectory_records"]:
+                mc = record.get("minimal_chain") or []
+                try:
+                    mc_id = expanded_minimal_chains.index(list(mc)) if mc else None
+                except ValueError:
+                    mc_id = None
+                record["minimal_chain_id"] = int(mc_id) if mc_id is not None else None
+                attempt_chain = record.get("attempt_chain") or []
+                stage_status = record.get("stage_status") or []
+                if attempt_chain:
+                    try:
+                        cmd_chains, cmd_ids = self.match_command_chains(
+                            attempt_chain=attempt_chain,
+                            stage_status=stage_status,
+                            expanded_minimal_chains=expanded_minimal_chains,
+                        )
+                        record["command_chains"] = [list(c) for c in cmd_chains]
+                        record["command_chain_ids"] = [int(c) for c in cmd_ids]
+                    except RuntimeError:
+                        # Should not happen when full bank is properly expanded;
+                        # log loudly and fall back to [minimal_chain] so the
+                        # collection doesn't get lost.
+                        logger = self.get_logger()
+                        if logger is not None:
+                            logger.warning(
+                                "match_command_chains failed against full bank for "
+                                "attempt_chain=%s; falling back to [minimal_chain]",
+                                attempt_chain,
+                            )
+                        record["command_chains"] = [list(mc)] if mc else []
+                        record["command_chain_ids"] = (
+                            [int(mc_id)] if mc_id is not None else []
+                        )
+                else:
+                    record["command_chains"] = []
+                    record["command_chain_ids"] = []
+            self.save_language_sidecars(
+                save_dir=ctx["save_dir"],
+                template_path=ctx["template_path"],
+                task_name=self.language_template_task_name(),
+                task_spec=ctx["task_spec"],
+                expanded_minimal_chains=expanded_minimal_chains,
+                expanded_actual_minimal_chains=expanded_actual_minimal_chains,
+                trajectory_records=ctx["trajectory_records"],
+                frame_records=ctx["frame_records"],
+            )
+        self.video_recorder = None
 
     @staticmethod
     def pc_normalize(pc):

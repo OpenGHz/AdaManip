@@ -1,7 +1,7 @@
 task:
   task_name: "open_pen"
   policy: "adaptive"
-  num_episode: 20
+  num_episode: 1
   num_eval_episode: 10
   seed: 0
   grasp: False
@@ -22,9 +22,17 @@ env:
 
   collectData: True
   collectPC: False
+  collectRGBVideo: True
   collectForce: True
   visualizePointcloud: False
   PointDownSampleNum: 4096
+  rgbVideo:
+    cameraType: fixed
+    cameraIds: [1]
+    fps: 10
+    codec: libx264
+    crf: 18
+    preset: fast
 
   reset:
     bottle:
@@ -88,7 +96,7 @@ env:
         'pen_7':
           bounding_box: pen_7/bounding_box.json
           name: 'pen_7'
-          path: pen_7/mobility.urdf       
+          path: pen_7/mobility.urdf
         'pen_10':
           bounding_box: pen_10/bounding_box.json
           name: 'pen_10'
@@ -96,7 +104,7 @@ env:
         'pen_13':
           bounding_box: pen_13/bounding_box.json
           name: 'pen_13'
-          path: pen_13/mobility.urdf     
+          path: pen_13/mobility.urdf
         'pen_17':
           bounding_box: pen_17/bounding_box.json
           name: 'pen_17'
@@ -105,7 +113,7 @@ env:
           bounding_box: pen_18/bounding_box.json
           name: 'pen_18'
           path: pen_18/mobility.urdf
-      
+
 sim:
   substeps: 2
   physx:

@@ -62,6 +62,31 @@ class OpenBottleManipulation(BaseManipulation) :
             self._CHAIN_ROTATE_LIFT if int(round(float(cw))) == 1 else self._CHAIN_DIRECT
         )
 
+    def ground_truth_chain_for_collect(
+        self, env_id: int, state: Dict[str, Any]
+    ) -> Optional[List[str]]:
+        # See open_pen.py for full rationale.
+        return self.ground_truth_chain_from_intrinsic_n(
+            env_id=env_id,
+            state=state,
+            n_min_attr="_bottle_intrinsic_n",
+            rotate_op="旋转瓶盖",
+            lift_op="向上提起瓶盖",
+            success_hint="opened the bottle cap",
+        )
+
+    def concrete_attempt_chain_for_collect(self, env_id: int, state: Dict[str, Any]):
+        chains = getattr(self, "_bottle_attempt_chains", None)
+        statuses = getattr(self, "_bottle_stage_statuses", None)
+        if (
+            chains is not None
+            and statuses is not None
+            and env_id < len(chains)
+            and chains[env_id]
+        ):
+            return list(chains[env_id]), list(statuses[env_id])
+        return super().concrete_attempt_chain_for_collect(env_id, state)
+
     def per_env_extra_log_fields(
         self, env_id: int, episode_state: Dict[str, Any]
     ) -> Dict[str, Any]:
@@ -149,30 +174,30 @@ class OpenBottleManipulation(BaseManipulation) :
     '''
     def collect_grasp_data(self):
         eps_num = self.cfg["task"]["num_episode"]
-        # ori_pose = pose.clone()
-        # ori_pose[:, 2] += self.env.gripper_length*2
+        ctx = self.collect_setup(role="grasp")
         demo_buffer = Experience()
         np.random.seed(self.cfg['task']['seed'])
         for eps in range(eps_num):
             self.eps_buffer = [Episode_Buffer() for _ in range(self.env.num_envs)]
             print("eps_{}".format(eps+1))
             self.env.reset()
-            # pre_pose = ori_pose.clone()
+            self.collect_episode_start(ctx, eps)
             pre_pose = self.env.adjust_hand_pose.clone()
             pre_pose[:,2] += self.env.gripper_length*2
 
             for i in range(3):
                 obs = self.env.collect_diff_data()
-                pc, env_state = obs_wrapper(obs) 
+                pc, env_state = obs_wrapper(obs)
 
                 for j in range(10):
                     self.env.step(pre_pose)
-                
+                self._record_video_frame()
+
                 gt_action = self.action_process(pre_pose)
                 self.env.actions = gt_action.clone()
                 for env_id in range(self.env.num_envs):
                     self.eps_buffer[env_id].add(pc[env_id], env_state[env_id], gt_action[env_id])
-                
+
             # grasp the handle
             pre_pose[:, 2] -= self.env.gripper_length + 0.008
             for i in range(3):
@@ -181,33 +206,31 @@ class OpenBottleManipulation(BaseManipulation) :
 
                 for j in range(10):
                     self.env.step(pre_pose)
-                
+                self._record_video_frame()
+
                 gt_action = self.action_process(pre_pose)
                 self.env.actions = gt_action.clone()
                 for env_id in range(self.env.num_envs):
                     self.eps_buffer[env_id].add(pc[env_id], env_state[env_id], gt_action[env_id])
-            
-            # update env end flag
+
+            done_flag = [True] * self.env.num_envs
             for env_id in range(self.env.num_envs):
                 demo_buffer.append(self.eps_buffer[env_id])
             print(f"Episode {eps} Succeeded")
-            
-        if self.cfg['env']['collectData']:
-            dataset_path = "grasp_bottle" + "_" + str(self.cfg["env"]["asset"]["AssetNum"])+"_eps"+str(self.cfg["task"]["num_episode"]) +"_clock"+str(self.cfg["env"]["clockwise"])
-            save_dir = './demo_data/'+ dataset_path
-            save_path = save_dir + '/demo_data.zip'
-            os.makedirs(save_dir, exist_ok=True)
-            demo_buffer.save(save_path)
+            self.collect_episode_end(ctx, eps, done_flag)
+
+        self.collect_finalize(ctx, demo_buffer)
 
     def collect_manip_data(self, grasp_net=None):
         error_ada_count = 1  # maximum number of failed trials
-        
+
         # move to the handle
         eps_num = self.cfg["task"]["num_episode"]
         policy = self.cfg["task"]["policy"]
         max_step = 25 if policy == "adaptive" else 20
         print("policy_{}--max_step_{}--num_eps_{}".format(policy, max_step, eps_num))
 
+        ctx = self.collect_setup(role="manip")
         demo_buffer = Experience()
         print("error_count_{}".format(error_ada_count))
         succ_cnt = [0] * self.env.num_envs
@@ -218,44 +241,77 @@ class OpenBottleManipulation(BaseManipulation) :
             done_flag = [False] * self.env.num_envs
             print("eps_{}".format(eps+1))
             self.env.reset()
+            self.collect_episode_start(ctx, eps)
+            self._bottle_attempt_chains = [[] for _ in range(self.env.num_envs)]
+            self._bottle_stage_statuses = [[] for _ in range(self.env.num_envs)]
+            self._bottle_intrinsic_n = [None] * self.env.num_envs
+            self._bottle_cum_rot = [0] * self.env.num_envs
+            current_op = [None] * self.env.num_envs
+            current_count = [0] * self.env.num_envs
+
+            def _flush(env_id, success):
+                op = current_op[env_id]
+                cnt = current_count[env_id]
+                if op is None or cnt == 0:
+                    return
+                if op == "旋转瓶盖":
+                    self._bottle_attempt_chains[env_id].append(f"{cnt}x旋转瓶盖")
+                    self._bottle_stage_statuses[env_id].append(True)
+                else:
+                    self._bottle_attempt_chains[env_id].append("向上提起瓶盖")
+                    self._bottle_stage_statuses[env_id].append(bool(success))
+                current_op[env_id] = None
+                current_count[env_id] = 0
 
             hand_pose = self.env.hand_rigid_body_tensor[:,:7]
 
-            
             pre_pose = self.env.adjust_hand_pose.clone()
             pre_pose[:,2] += self.env.gripper_length*2
 
             for i in range(3):
                 for j in range(10):
                     self.env.step(pre_pose)
-                
+                self._record_video_frame()
+
             # grasp the handle
             pre_pose[:, 2] -= self.env.gripper_length + 0.008
             for i in range(3):
                 for j in range(10):
                     self.env.step(pre_pose)
-            
+                self._record_video_frame()
+
             self.env.gripper = True
             for i in range(10):
                 self.env.step(hand_pose)
+            self._record_video_frame()
 
-            
-            # self.diffusion_eval_grasp(grasp_net)
             init_actions = self.action_process(hand_pose)
             self.env.actions = init_actions
+            # Initial check: if any env's open_bottle_stage is already True
+            # before any rotation, record N_min=0.
+            for env_id in range(self.env.num_envs):
+                if (
+                    bool(self.env.open_bottle_stage[env_id].item())
+                    and self._bottle_intrinsic_n[env_id] is None
+                ):
+                    self._bottle_intrinsic_n[env_id] = 0
             ####################start collect manipulation data############
             open_size = 0.015
-            rot_quat = torch.tensor([ 0, 0, -0.1305262, 0.9914449], device=self.env.device) 
+            rot_quat = torch.tensor([ 0, 0, -0.1305262, 0.9914449], device=self.env.device)
             s_rot_quat = torch.tensor([ 0, 0, 0.1305262, 0.9914449], device=self.env.device)
             rotate_dof = self.env.two_dof_tensor[:,0]
+            prev_op_for_env = [None] * self.env.num_envs
+            step_idx_for_env = [0] * self.env.num_envs
             for t in range(max_step):
                 cur_p = hand_pose[:, :3]
                 cur_q = hand_pose[:,3:7]
                 pre_p = cur_p.clone()
                 pre_q = cur_q.clone()
+                res_per_env = [None] * self.env.num_envs
                 if g_flag:
                     pre_p[i,2] += open_size
                     self.env.action_chosen[env_id,t] = "z"
+                    res_per_env[env_id] = "z"
                     curr_err_count += 1
                 else:
                     for i in range(self.env.num_envs):
@@ -266,6 +322,7 @@ class OpenBottleManipulation(BaseManipulation) :
                             g_flag = flag
                         else:
                             raise NotImplementedError
+                        res_per_env[i] = res
                         if res == "z":
                             pre_p[i,2] += open_size
                         elif res == "o":
@@ -283,27 +340,47 @@ class OpenBottleManipulation(BaseManipulation) :
                         obs = self.env.collect_single_diff_data(env_id)
                         pc, env_state = obs_wrapper(obs)
                         eps_buffer[env_id].add(pc, env_state, gt_pose[env_id])
+                        if res_per_env[env_id] is not None:
+                            op = "向上提起瓶盖" if res_per_env[env_id] == "z" else "旋转瓶盖"
+                            if current_op[env_id] is None:
+                                current_op[env_id] = op
+                                current_count[env_id] = 1
+                            elif current_op[env_id] == op:
+                                current_count[env_id] += 1
+                            else:
+                                _flush(env_id, success=False)
+                                current_op[env_id] = op
+                                current_count[env_id] = 1
+                            step_idx_for_env[env_id] = len(self._bottle_attempt_chains[env_id])
+                            prev_op_for_env[env_id] = op
+                            self.append_frame_label_for(env_id, step_idx_for_env[env_id], op)
 
                 for j in range(15):
                     self.env.step(pred_pose)
+                self._record_video_frame()
 
                 self.env.actions = gt_pose
+                # Update intrinsic N tracking (env-physics derived).
+                for env_id in range(self.env.num_envs):
+                    if res_per_env[env_id] in ("r", "o"):
+                        self._bottle_cum_rot[env_id] += 1
+                    if (
+                        bool(self.env.open_bottle_stage[env_id].item())
+                        and self._bottle_intrinsic_n[env_id] is None
+                    ):
+                        self._bottle_intrinsic_n[env_id] = int(self._bottle_cum_rot[env_id])
                 # update env end flag
                 for env_id in range(self.env.num_envs):
                     if (torch.abs(self.env.one_dof_tensor[env_id, 0]) > 0.04).cpu().item() and not done_flag[env_id]:
+                        _flush(env_id, success=True)
                         demo_buffer.append(eps_buffer[env_id])
                         done_flag[env_id] = True
                         succ_cnt[env_id] += 1
                         print(f"Env {env_id} Succeeded")
             print(succ_cnt)
-            # if min(succ_cnt) >= eps_num:
-            #     break
-        if self.cfg['env']['collectData']:
-            dataset_path = "manip_bottle_" + self.cfg["task"]["policy"] + "_" + str(self.cfg["env"]["asset"]["AssetNum"]) + "_eps" + str(eps_num) + "_clock" + str(self.cfg["env"]["clockwise"]) + "_" + str(error_ada_count)
-            save_dir = './demo_data/'+ dataset_path
-            save_path = save_dir + '/demo_data.zip'
-            os.makedirs(save_dir, exist_ok=True)
-            demo_buffer.save(save_path)
+            self.collect_episode_end(ctx, eps, done_flag)
+
+        self.collect_finalize(ctx, demo_buffer)
     
     def succ_policy(self, env_id):
         clock_wise = self.env.clock_wise[env_id]

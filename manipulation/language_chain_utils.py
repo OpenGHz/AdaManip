@@ -42,6 +42,106 @@ def expand_chain_to_atomic(chain: Iterable[str]) -> List[str]:
     return atomic
 
 
+def extract_minimal_chain_from_attempt(
+    attempt_chain: Iterable[str],
+    stage_status: Iterable[bool],
+) -> List[str]:
+    """Aggregate ``attempt_chain`` into the shortest chain that, if executed
+    straight through (no failures), would still successfully complete the
+    task. Pure attempt-derived: it does NOT consult god's-eye-view env state.
+
+    Algorithm (two passes):
+
+    1. Drop every stage whose ``stage_status`` is ``False`` (those stages
+       were detours that didn't push the task forward).
+    2. Merge consecutive stages with the same operation:
+       - For ``Nx{op}`` repeat stages, sum the ``N``: ``1x旋转 + 1x旋转
+         → 2x旋转``.
+       - For plain non-repeat stages, dedup adjacent identical strings:
+         ``[拉门, 拉门] → [拉门]`` (rare in practice).
+
+    Examples
+    --------
+    >>> # Bottle: 1 rotate, lift fails, 1 more rotate, lift succeeds.
+    >>> # Cumulative 2 rotations were what actually worked.
+    >>> extract_minimal_chain_from_attempt(
+    ...     ["1x旋转瓶盖", "向上提起瓶盖", "1x旋转瓶盖", "向上提起瓶盖"],
+    ...     [True, False, True, True],
+    ... )
+    ['2x旋转瓶盖', '向上提起瓶盖']
+
+    >>> # Microwave: pull fails (locked door), then button + pull succeed.
+    >>> extract_minimal_chain_from_attempt(
+    ...     ["拉门", "按按钮", "拉门"], [False, True, True],
+    ... )
+    ['按按钮', '拉门']
+
+    >>> # Already-clean trajectory passes through unchanged.
+    >>> extract_minimal_chain_from_attempt(["拉门"], [True])
+    ['拉门']
+
+    Parameters
+    ----------
+    attempt_chain
+        Sequence of stage strings as they appear in trajectory_language.jsonl.
+    stage_status
+        Boolean sequence aligned with ``attempt_chain``: ``True`` if the
+        stage succeeded, ``False`` if it failed.
+
+    Returns
+    -------
+    List of stage strings — the aggregated minimal_chain.
+
+    Raises
+    ------
+    ValueError
+        When ``attempt_chain`` and ``stage_status`` have different lengths,
+        or when an Nx stage has a non-positive count.
+    """
+
+    attempt_list = [str(s) for s in attempt_chain]
+    status_list = [bool(s) for s in stage_status]
+    if len(attempt_list) != len(status_list):
+        raise ValueError(
+            "attempt_chain and stage_status must have the same length; "
+            f"got {len(attempt_list)} vs {len(status_list)}"
+        )
+
+    # Pass 1: drop failed stages.
+    successful_stages = [
+        stage for stage, ok in zip(attempt_list, status_list) if ok
+    ]
+
+    # Pass 2: merge consecutive same-operation stages.
+    merged: List[str] = []
+    for stage in successful_stages:
+        if not merged:
+            merged.append(stage)
+            continue
+        prev = merged[-1]
+        m_curr = _REPEAT_STAGE_RE.match(stage)
+        m_prev = _REPEAT_STAGE_RE.match(prev)
+        if (
+            m_curr is not None
+            and m_prev is not None
+            and m_curr.group(2).strip() == m_prev.group(2).strip()
+        ):
+            n_curr = int(m_curr.group(1))
+            n_prev = int(m_prev.group(1))
+            if n_curr <= 0 or n_prev <= 0:
+                raise ValueError(
+                    f"repeat counts must be positive; got prev={prev!r} curr={stage!r}"
+                )
+            op = m_curr.group(2).strip()
+            merged[-1] = f"{n_prev + n_curr}x{op}"
+        elif m_curr is None and m_prev is None and stage == prev:
+            # Adjacent identical non-repeat stages: dedup.
+            continue
+        else:
+            merged.append(stage)
+    return merged
+
+
 def is_subsequence(needle: Sequence[str], haystack: Sequence[str]) -> bool:
     """Return whether all needle tokens appear in order inside haystack."""
 

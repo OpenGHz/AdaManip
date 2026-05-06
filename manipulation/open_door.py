@@ -109,11 +109,13 @@ class OpenDoorManipulation(BaseManipulation) :
     '''
     def collect_grasp_data(self):
         eps_num = self.cfg["task"]["num_episode"]
+        ctx = self.collect_setup(role="grasp")
         demo_buffer = Experience()
         for eps in range(eps_num):
             self.eps_buffer = [Episode_Buffer() for _ in range(self.env.num_envs)]
             print("eps_{}".format(eps+1))
             self.env.reset()
+            self.collect_episode_start(ctx, eps)
             pre_pose = self.env.adjust_hand_pose.clone()
             pre_pose[:, 0] += self.env.gripper_length*2
             pre_pose[:, 2] += 0.01
@@ -123,6 +125,7 @@ class OpenDoorManipulation(BaseManipulation) :
 
                 for j in range(10):
                     self.env.step(pre_pose)
+                self._record_video_frame()
 
                 gt_action = self.action_process(pre_pose)
                 self.env.actions = gt_action.clone()
@@ -135,24 +138,22 @@ class OpenDoorManipulation(BaseManipulation) :
 
                 for j in range(10):
                     self.env.step(pre_pose)
-                
+                self._record_video_frame()
+
                 gt_action = self.action_process(pre_pose)
                 self.env.actions = gt_action.clone()
                 for env_id in range(self.env.num_envs):
                     self.eps_buffer[env_id].add(pc[env_id], env_state[env_id], gt_action[env_id])
 
-            # update env end flag
+            # update env end flag (grasp policy: every env succeeds by construction)
+            done_flag = [True] * self.env.num_envs
             for env_id in range(self.env.num_envs):
                 demo_buffer.append(self.eps_buffer[env_id])
             print(f"Episode {eps} Succeeded")
+            self.collect_episode_end(ctx, eps, done_flag)
 
-        if self.cfg['env']['collectData']:
-            dataset_path = "grasp_door" + "_" + str(self.cfg["env"]["asset"]["AssetNum"]) +"_eps"+str(self.cfg["task"]["num_episode"])+ "_clock" + str(self.cfg["env"]["clockwise"])
-            save_dir = './demo_data/'+ dataset_path
-            save_path = save_dir + '/demo_data.zip'
-            os.makedirs(save_dir, exist_ok=True)
-            demo_buffer.save(save_path)
-    
+        self.collect_finalize(ctx, demo_buffer)
+
     '''
     collect data
     '''
@@ -160,12 +161,13 @@ class OpenDoorManipulation(BaseManipulation) :
         eps_num = self.cfg["task"]["num_episode"]
         policy = self.cfg["task"]["policy"]
         print(f"policy: {policy}")
+        ctx = self.collect_setup(role="manip")
         demo_buffer = Experience()
         open_size = 0.045
         handle_q = self.env.part_rigid_body_tensor[:, 3:7]
         open_dir = quat_axis(handle_q, axis=2)
-        rot_quat = torch.tensor([ 0, 0, -0.1736482, 0.9848078], device=self.env.device) 
-        s_rot_quat = torch.tensor([ 0, 0, 0.1736482, 0.9848078], device=self.env.device) 
+        rot_quat = torch.tensor([ 0, 0, -0.1736482, 0.9848078], device=self.env.device)
+        s_rot_quat = torch.tensor([ 0, 0, 0.1736482, 0.9848078], device=self.env.device)
         hand_pose = self.env.hand_rigid_body_tensor[:,:7]
         rotate_dof = self.env.two_dof_tensor[:,0]
         down_q = torch.stack(self.env.num_envs * [torch.tensor([0, 1, 0, 0])]).to(self.env.device).view((self.env.num_envs, 4))
@@ -174,19 +176,23 @@ class OpenDoorManipulation(BaseManipulation) :
             done_flag = [False] * self.env.num_envs
             print("eps_{}".format(eps+1))
             self.env.reset()
+            self.collect_episode_start(ctx, eps)
             pre_pose = self.env.adjust_hand_pose.clone()
             pre_pose[:, 0] += self.env.gripper_length*2
             pre_pose[:, 2] += 0.01
             for i in range(4):
                 for j in range(10):
                     self.env.step(pre_pose)
+                self._record_video_frame()
             pre_pose[:, 0] -= self.env.gripper_length + 0.008
             for i in range(3):
                 for j in range(10):
                     self.env.step(pre_pose)
+                self._record_video_frame()
             self.env.gripper = True
             for i in range(10):
                 self.env.step(hand_pose)
+            self._record_video_frame()
             init_actions = self.action_process(hand_pose)
             self.env.actions = init_actions
             ################start collect manip data#####################
@@ -196,7 +202,7 @@ class OpenDoorManipulation(BaseManipulation) :
                 cur_q = hand_pose[:,3:7]
                 pre_p = cur_p.clone()
                 pre_q = cur_q.clone()
-                
+
                 for i in range(self.env.num_envs):
                     if policy == "succ":
                         res = self.succ_policy(i)
@@ -223,6 +229,7 @@ class OpenDoorManipulation(BaseManipulation) :
 
                 for j in range(15):
                     self.env.step(pred_pose)
+                self._record_video_frame()
 
                 self.env.actions = gt_pose
                 for env_id in range(self.env.num_envs):
@@ -230,13 +237,9 @@ class OpenDoorManipulation(BaseManipulation) :
                         demo_buffer.append(eps_buffer[env_id])
                         done_flag[env_id] = True
                         print(f"Env {env_id} Succeeded")
-                
-        if self.cfg['env']['collectData']:
-            dataset_path = "manip_door_" + self.cfg["task"]["policy"] + "_" + str(self.cfg["env"]["asset"]["AssetNum"])+"_eps"+str(self.cfg["task"]["num_episode"])+ "_clock"+str(self.cfg["env"]["clockwise"])
-            save_dir = './demo_data/'+ dataset_path
-            save_path = save_dir + '/demo_data.zip'
-            os.makedirs(save_dir, exist_ok=True)
-            demo_buffer.save(save_path)
+            self.collect_episode_end(ctx, eps, done_flag)
+
+        self.collect_finalize(ctx, demo_buffer)
     
     def succ_policy(self, env_id):
         clock_wise = self.env.clock_wise[env_id]

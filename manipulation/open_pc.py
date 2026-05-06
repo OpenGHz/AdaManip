@@ -59,6 +59,31 @@ class OpenPressureCookerManipulation(BaseManipulation) :
             self._CHAIN_ROTATE_LIFT if int(round(float(cw))) == 1 else self._CHAIN_DIRECT
         )
 
+    def ground_truth_chain_for_collect(
+        self, env_id: int, state: Dict[str, Any]
+    ) -> Optional[List[str]]:
+        # See open_pen.py for full rationale.
+        return self.ground_truth_chain_from_intrinsic_n(
+            env_id=env_id,
+            state=state,
+            n_min_attr="_pc_intrinsic_n",
+            rotate_op="旋转把手",
+            lift_op="向上提起把手",
+            success_hint="lifted the pressure-cooker handle",
+        )
+
+    def concrete_attempt_chain_for_collect(self, env_id: int, state: Dict[str, Any]):
+        chains = getattr(self, "_pc_attempt_chains", None)
+        statuses = getattr(self, "_pc_stage_statuses", None)
+        if (
+            chains is not None
+            and statuses is not None
+            and env_id < len(chains)
+            and chains[env_id]
+        ):
+            return list(chains[env_id]), list(statuses[env_id])
+        return super().concrete_attempt_chain_for_collect(env_id, state)
+
     def per_env_extra_log_fields(
         self, env_id: int, episode_state: Dict[str, Any]
     ) -> Dict[str, Any]:
@@ -143,11 +168,13 @@ class OpenPressureCookerManipulation(BaseManipulation) :
     '''
     def collect_grasp_data(self):
         eps_num = self.cfg["task"]["num_episode"]
+        ctx = self.collect_setup(role="grasp")
         demo_buffer = Experience()
         for eps in range(eps_num):
             self.eps_buffer = [Episode_Buffer() for _ in range(self.env.num_envs)]
             print("eps_{}".format(eps+1))
             self.env.reset()
+            self.collect_episode_start(ctx, eps)
             pre_pose = self.env.adjust_hand_pose.clone()
             pre_pose[:, 2] += self.env.gripper_length*2
             for i in range(3):
@@ -156,6 +183,7 @@ class OpenPressureCookerManipulation(BaseManipulation) :
 
                 for j in range(10):
                     self.env.step(pre_pose)
+                self._record_video_frame()
 
                 gt_action = self.action_process(pre_pose)
                 self.env.actions = gt_action.clone()
@@ -168,23 +196,21 @@ class OpenPressureCookerManipulation(BaseManipulation) :
 
                 for j in range(10):
                     self.env.step(pre_pose)
-                
+                self._record_video_frame()
+
                 gt_action = self.action_process(pre_pose)
                 self.env.actions = gt_action.clone()
                 for env_id in range(self.env.num_envs):
                     self.eps_buffer[env_id].add(pc[env_id], env_state[env_id], gt_action[env_id])
 
-            # update env end flag
+            done_flag = [True] * self.env.num_envs
             for env_id in range(self.env.num_envs):
                 demo_buffer.append(self.eps_buffer[env_id])
             print(f"Episode {eps} Succeeded")
+            self.collect_episode_end(ctx, eps, done_flag)
 
-        if self.cfg['env']['collectData']:
-            dataset_path = "grasp_pc" + "_" + str(self.cfg["env"]["asset"]["AssetNum"])+ "_eps"+str(self.cfg["task"]["num_episode"]) + "_clock"+str(self.cfg["env"]["clockwise"])
-            save_dir = './demo_data/'+ dataset_path
-            save_path = save_dir + '/demo_data.zip'
-            os.makedirs(save_dir, exist_ok=True)
-            demo_buffer.save(save_path)
+        self.collect_finalize(ctx, demo_buffer)
+
     '''
     manipulation data collect
     '''
@@ -193,6 +219,7 @@ class OpenPressureCookerManipulation(BaseManipulation) :
         policy = self.cfg["task"]["policy"]
         max_step = 25 if policy == "adaptive" else 20
         print("policy_{}--max_step_{}--num_eps_{}".format(policy, max_step, eps_num))
+        ctx = self.collect_setup(role="manip")
         demo_buffer = Experience()
         succ_cnt = [0] * self.env.num_envs
         for eps in range(eps_num):
@@ -200,23 +227,53 @@ class OpenPressureCookerManipulation(BaseManipulation) :
             done_flag = [False] * self.env.num_envs
             print("eps_{}".format(eps+1))
             self.env.reset()
+            self.collect_episode_start(ctx, eps)
+            self._pc_attempt_chains = [[] for _ in range(self.env.num_envs)]
+            self._pc_stage_statuses = [[] for _ in range(self.env.num_envs)]
+            self._pc_intrinsic_n = [None] * self.env.num_envs
+            self._pc_cum_rot = [0] * self.env.num_envs
+            current_op = [None] * self.env.num_envs
+            current_count = [0] * self.env.num_envs
+
+            def _flush(env_id, success):
+                op = current_op[env_id]
+                cnt = current_count[env_id]
+                if op is None or cnt == 0:
+                    return
+                if op == "旋转把手":
+                    self._pc_attempt_chains[env_id].append(f"{cnt}x旋转把手")
+                    self._pc_stage_statuses[env_id].append(True)
+                else:
+                    self._pc_attempt_chains[env_id].append("向上提起把手")
+                    self._pc_stage_statuses[env_id].append(bool(success))
+                current_op[env_id] = None
+                current_count[env_id] = 0
 
             pre_pose = self.env.adjust_hand_pose.clone()
             pre_pose[:, 2] += self.env.gripper_length*2
             for i in range(3):
                 for j in range(10):
                     self.env.step(pre_pose)
+                self._record_video_frame()
             pre_pose[:, 2] -= self.env.gripper_length + 0.012
             for i in range(3):
                 for j in range(10):
                     self.env.step(pre_pose)
+                self._record_video_frame()
 
             hand_pose = self.env.hand_rigid_body_tensor[:,:7]
             self.env.gripper = True
             for i in range(10):
                 self.env.step(hand_pose)
+            self._record_video_frame()
             init_actions = self.action_process(hand_pose)
             self.env.actions = init_actions
+            for env_id in range(self.env.num_envs):
+                if (
+                    bool(self.env.open_bottle_stage[env_id].item())
+                    and self._pc_intrinsic_n[env_id] is None
+                ):
+                    self._pc_intrinsic_n[env_id] = 0
             ####################start collect manipulation data###################
             max_step = 25 if policy == "adaptive" else 20
             step_size = 0.035
@@ -226,10 +283,13 @@ class OpenPressureCookerManipulation(BaseManipulation) :
             rotate_dir = quat_axis(handle_quat, axis=0)
             down_q = torch.stack(self.env.num_envs * [torch.tensor([0.5, 0.5, -0.5, 0.5])]).to(self.env.device).view((self.env.num_envs, 4))
             rotate_dof = self.env.two_dof_tensor[:,0]
+            prev_op_for_env = [None] * self.env.num_envs
+            step_idx_for_env = [0] * self.env.num_envs
             for t in range(max_step):
                 cur_p = hand_pose[:,:3]
                 pre_p = cur_p.clone()
-                
+
+                res_per_env = []
                 for i in range(self.env.num_envs):
                     if policy == "succ":
                         res = self.succ_policy(i)
@@ -237,6 +297,7 @@ class OpenPressureCookerManipulation(BaseManipulation) :
                         res = self.ada_policy(i, t, rotate_dof[i])
                     else:
                         raise NotImplementedError
+                    res_per_env.append(res)
                     if res == 'z':
                         pre_p[i, 2] += open_size
                     elif res == 'r':
@@ -253,24 +314,43 @@ class OpenPressureCookerManipulation(BaseManipulation) :
                         obs = self.env.collect_single_diff_data(env_id)
                         pc, env_state = obs_wrapper(obs)
                         eps_buffer[env_id].add(pc, env_state, gt_pose[env_id])
+                        op = "向上提起把手" if res_per_env[env_id] == "z" else "旋转把手"
+                        if current_op[env_id] is None:
+                            current_op[env_id] = op
+                            current_count[env_id] = 1
+                        elif current_op[env_id] == op:
+                            current_count[env_id] += 1
+                        else:
+                            _flush(env_id, success=False)
+                            current_op[env_id] = op
+                            current_count[env_id] = 1
+                        step_idx_for_env[env_id] = len(self._pc_attempt_chains[env_id])
+                        prev_op_for_env[env_id] = op
+                        self.append_frame_label_for(env_id, step_idx_for_env[env_id], op)
                 for j in range(15):
                     self.env.step(pre_pose)
+                self._record_video_frame()
                 self.env.actions = gt_pose
+                for env_id in range(self.env.num_envs):
+                    if res_per_env[env_id] in ("r", "o"):
+                        self._pc_cum_rot[env_id] += 1
+                    if (
+                        bool(self.env.open_bottle_stage[env_id].item())
+                        and self._pc_intrinsic_n[env_id] is None
+                    ):
+                        self._pc_intrinsic_n[env_id] = int(self._pc_cum_rot[env_id])
                 # update done_flag
                 for env_id in range(self.env.num_envs):
                     if (torch.abs(self.env.one_dof_tensor[env_id, 0]) > 0.035).cpu().item() and not done_flag[env_id]:
+                        _flush(env_id, success=True)
                         demo_buffer.append(eps_buffer[env_id])
                         done_flag[env_id] = True
                         succ_cnt[env_id] += 1
                         print(f"Env {env_id} Succeeded")
             print(succ_cnt)
+            self.collect_episode_end(ctx, eps, done_flag)
 
-        if self.cfg['env']['collectData']:
-            dataset_path = "manip_pc_" + self.cfg["task"]["policy"] + "_" + str(self.cfg["env"]["asset"]["AssetNum"])+ "_eps" + str(eps_num) + "_clock" + str(self.cfg["env"]["clockwise"]) 
-            save_dir = './demo_data/'+ dataset_path
-            save_path = save_dir + '/demo_data.zip'
-            os.makedirs(save_dir, exist_ok=True)
-            demo_buffer.save(save_path)
+        self.collect_finalize(ctx, demo_buffer)
 
 
     def succ_policy(self, env_id):
