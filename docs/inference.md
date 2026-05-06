@@ -659,51 +659,17 @@ task:
 
 ### 8.3 状态机与每条 episode 的执行
 
-chain 的推理优先级由 [manipulation/language_chain_utils.py](../manipulation/language_chain_utils.py)
-中的通用函数计算，不包含 microwave 专用判断。函数输入应是已经展开后的 `expanded_minimal_chains`；
-也就是说，`language_template.json` 里的抽象 `Nx...` 需要先在数据侧展开为 `1x...`、`2x...` 等具体
-stage。测试脚本 [tests/show_language_chain_reasoning_examples.py](../tests/show_language_chain_reasoning_examples.py)
-会为 `Nx` 任务构造少量示例展开，方便人工检查。
+chain 的推理优先级由 [manipulation/language_chain_utils.py](../manipulation/language_chain_utils.py) 中的通用函数计算，不包含 microwave 专用判断。函数输入应是已经展开后的 `expanded_minimal_chains`；也就是说，`language_template.json` 里的抽象 `Nx...` 需要先在数据侧展开为 `1x...`、`2x...` 等具体 stage。测试脚本 [tests/show_language_chain_reasoning_examples.py](../tests/show_language_chain_reasoning_examples.py) 会为 `Nx` 任务构造少量示例展开，方便人工检查。
 
-`infer_attempt_chain(language_chain, ground_truth_chain)` 的实现原理：
+涉及的关键函数：
 
-1. 先对输入 chain 做规范化，去掉空 stage，并保留原始 stage 文本作为最终输出形式。
-2. 为了判断“某个语言条件是否已经覆盖真实最小链”，会临时把具体重复 stage 展开到原子操作层面，例如 `2x旋转瓶盖` 会展开为 `["旋转瓶盖", "旋转瓶盖"]`。
-3. 在原子操作层面检查 `ground_truth_chain` 是否是 `language_chain` 的有序子序列。这里使用子序列而不是前缀，是因为更长的语言条件可能包含真实最小链需要的所有动作；相反方向的动作名不同，例如 `顺时针旋转` 和 `逆时针旋转`，不会被误判为相同操作。
-4. 如果子序列检查通过，说明在“模型语言条件遵循能力足够”的假设下，本轮执行 `language_chain` 就能覆盖真实需求，因此 `attempt_chain = language_chain`。
-5. 如果子序列检查不通过，说明第一次按 `language_chain` 执行不足以完成真实任务；诊断模型认为之后会追加真实最小恢复链，因此 `attempt_chain = language_chain + ground_truth_chain`。
+- `infer_attempt_chain(language_chain, ground_truth_chain)`：抽象推理"按 language_chain 执行、ground truth 是 ground_truth_chain 时观察到的 attempt"。
+- `infer_reasonable_prediction_chains(language_chain, ground_truth_chain=None, expanded_minimal_chains=None)`：asker 根据本轮实际表现可以合理返回的 chain 集合。
+- `rank_expanded_minimal_chain_ids(expanded_minimal_chains)` / `sort_expanded_minimal_chains_by_inference_priority(expanded_minimal_chains)`：按每条 chain 当探针时的信息量指标排序，决定 adaptive eval 的尝试顺序。
 
-这个函数只做抽象 chain 推理，不读取 `clock_wise`、几何状态或视频；它表达的是“在某个语言条件下（假设被严格遵循并且无失误），若真实状态属于某条最小链，理论上会观察到什么完整尝试序列”。
-如果假设不成立，比如真实 rollout 中出现夹爪松开、门回关、二次尝试等物理/控制细节，实际 attempt chain 可能比这个抽象推理结果更长。
-这些情况目前无法由该函数自动恢复，需要人工复核视频或后续接入更细粒度的轨迹事件检测。
+**实现细节、入参语义、信息量打分公式、各 case 例子见 [docs/design/chain_utils_reference.md](design/chain_utils_reference.md) §1**——本文档不再展开。
 
-`infer_reasonable_prediction_chains(language_chain, ground_truth_chain=None, expanded_minimal_chains=None)` 的实现原理：
-
-1. 如果提供了 `ground_truth_chain`，就只针对这一个真实状态计算 `observed_attempt`。
-2. 如果没有提供 `ground_truth_chain`，必须提供 `expanded_minimal_chains`；函数会把每条候选 chain 都当作一种可能 ground truth，逐个调用 `infer_attempt_chain(language_chain, candidate_chain)`，得到所有可能发生的 attempt。
-3. 这个函数的目标不是枚举所有隐藏 ground-truth 状态，而是枚举 asker 只根据本轮实际表现可以合理返回的 chain。
-4. 对每个可能 ground truth，若 `language_chain` 已经覆盖它，实际表现就是按 `language_chain` 完成任务，因此 `language_chain` 是合理预测。
-5. 对每个可能 ground truth，若 `language_chain` 不能覆盖它，说明第一次尝试失败后需要执行真实恢复链，因此该 ground-truth chain 是合理预测。
-6. 如果完整 `observed_attempt` 本身也是 `expanded_minimal_chains` 里的合法候选 chain，则把完整 `observed_attempt` 也加入合理预测集合。当前模板中这通常只是和上面的预测重复，但这样可以兼容未来更复杂的任务模板。
-
-例如 `language_chain=["按按钮","拉门"]`、`ground_truth_chain=["拉门"]` 时，`observed_attempt=["按按钮","拉门"]`。虽然隐藏状态可能是“未锁”或“需要按按钮解锁”，但 asker 只能看到确实执行了 `["按按钮","拉门"]`，因此它返回 `["按按钮","拉门"]` 是合理的，即使它不严格等于真实 `ground_truth_chain`。
-
-如果没有提供 ground truth，而只知道 `language_chain=["拉门"]`，则必须结合 microwave 的候选全集枚举：当 ground truth 为 `["拉门"]` 时可能看到 `["拉门"]`；当 ground truth 为 `["按按钮","拉门"]` 时可能看到 `["拉门","按按钮","拉门"]`。因此合理预测集合为 `["拉门"]` 和 `["按按钮","拉门"]`。
-
-`rank_expanded_minimal_chain_ids(expanded_minimal_chains)` / `sort_expanded_minimal_chains_by_inference_priority(expanded_minimal_chains)` 的实现原理：
-
-1. 把每一条 `expanded_minimal_chains[i]` 轮流当作候选 `language_chain`。
-2. 对所有可能的 `ground_truth_chain` 枚举调用 `infer_attempt_chain(language_chain, ground_truth_chain)`。
-3. 按得到的 `attempt_chain` 分组：同一个 `attempt_chain` 下可能对应多个 ground-truth chain id。若某个分组只有一个 id，说明只要观察到该 attempt，就能唯一反推出真实状态。
-4. 对每个候选 `language_chain` 计算信息量指标：
-   - `unique_ground_truth_count/rate`：能被唯一识别的 ground-truth 数量/比例，越大越好。
-   - `worst_case_candidate_count`：最坏情况下同一个 attempt 还剩多少个候选 ground-truth，越小越好。
-   - `expected_candidate_count`：按 ground-truth 均匀先验加权后的平均候选数，越小越好。
-   - `distinct_attempt_count`：这个 language chain 能产生多少种不同 attempt，越多通常越有区分度。
-   - `mean_attempt_atomic_length` 和 `language_atomic_length`：作为次级代价项，避免在信息量相同时优先选择明显更长的尝试。
-5. 排序 key 固定为：先最大化 `unique_ground_truth_count`，再最小化 `worst_case_candidate_count`，再最小化 `expected_candidate_count`，再最大化 `distinct_attempt_count`，最后依次用 `mean_attempt_atomic_length`、`language_atomic_length` 和原始 chain id 做稳定排序。
-
-因此 microwave 中 `["拉门"]` 会排在 `["按按钮", "拉门"]` 前面：前者在锁住时会形成 `["拉门", "按按钮", "拉门"]`，能区分锁住/未锁；后者无论锁住与否都可能只看到 `["按按钮", "拉门"]`，无法唯一判断锁状态。
+排序结果直接决定 adaptive eval 的探针顺序：例如 microwave 中 `["拉门"]` 会排在 `["按按钮", "拉门"]` 前面（前者在锁住时会形成 `["拉门", "按按钮", "拉门"]`，能区分锁住/未锁；后者无论锁住与否都可能只看到 `["按按钮", "拉门"]`，无法唯一判断锁状态）。
 
 每个 env 在 manipulation 上对应一个 `AdaptiveLanguageState`（在
 [manipulation/adaptive_language_asker.py](../manipulation/adaptive_language_asker.py)）：

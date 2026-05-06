@@ -319,11 +319,14 @@ bank 在 episode 开始前就用 `cfg/language_template.json` 的 `minimal_chain
 ## 9. 参考代码位置
 
 - chain 计算与 sidecar 写入：`manipulation/base_manipulation.py::collect_episode_end` / `collect_finalize` / `save_language_sidecars`
-- minimal_chain 提取（suffix-after-last-fail）：直接 inline 在 `collect_episode_end` 里
-- 任务级钩子：
-  - `concrete_attempt_chain_for_collect(env_id, state)`：返回 `(attempt_chain, stage_status)`。pen / bottle / pc / cm / microwave 各自 override；其他任务用 base 默认（`(canonical, [True]*n)`）
-  - `ground_truth_chain_for_collect(env_id, state)`：返回上帝视角最优。pen / bottle / pc / cm 各自 override（累计 N）；其他任务用 base 默认（`canonical_minimal_chain_for_state`）
-  - `canonical_minimal_chain_for_state(state)`：返回该 cw 状态下任务定义的"标准答案" chain。所有任务都 override
-- prefix 匹配：`manipulation/base_manipulation.py::match_command_chains`
-- bank 强行展开（1..N_max）+ chain id 重映射 + abstract Nx 过滤：`manipulation/base_manipulation.py::_build_full_minimal_chain_bank` + `collect_finalize`
-- 训练时按 chain id 取 embedding：`docs/design/data_preprocess.md` + `try_to_remember/...` 中的 dataloader
+- 任务级钩子（详细签名 + 行为见 [`chain_utils_reference.md`](chain_utils_reference.md) §2）：
+  - `canonical_minimal_chain_for_state(state)`：所有任务都 override，返回该 cw 状态下任务模板的"标准答案"链。
+  - `concrete_attempt_chain_for_collect(env_id, state)`：返回 `(attempt_chain, stage_status)`。pen / bottle / pc / cm / microwave 各自 override；其他任务用 base 默认。
+  - `ground_truth_chain_for_collect(env_id, state)`：返回上帝视角最优。4 个 Nx 任务 override 调用 `ground_truth_chain_from_intrinsic_n`；其他任务用 base 默认（`canonical_minimal_chain_for_state`）。
+- 共享工具函数（详见 [`chain_utils_reference.md`](chain_utils_reference.md)）：
+  - `extract_minimal_chain_from_attempt(attempt_chain, stage_status)`（`language_chain_utils.py` §1.6）：聚合 attempt 得到 minimal_chain。
+  - `match_command_chains(...)`（`base_manipulation.py` §2.5）：按 schema rule 算 `command_chains` / `command_chain_ids`。
+  - `_build_full_minimal_chain_bank(observed_chains, trajectory_records)`（`base_manipulation.py` §2.6）：bank 强行展开成 `1..N_max` + chain id 重映射 + abstract Nx 过滤。
+  - `ground_truth_chain_from_intrinsic_n(...)`（`base_manipulation.py` §2.4）：4 个 Nx 任务 ground_truth override 的共享 body。
+- 推理优先级排序：`language_chain_utils.py` 的 `infer_attempt_chain` / `infer_reasonable_prediction_chains` / `rank_*` / `score_*`，详见 [`chain_utils_reference.md`](chain_utils_reference.md) §1。
+- 训练时按 chain id 取 embedding：[`data_preprocess.md`](data_preprocess.md) + `try_to_remember/...` 中的 dataloader。
