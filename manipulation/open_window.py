@@ -53,6 +53,18 @@ class OpenWindowManipulation(BaseManipulation) :
             return None
         return list(self._CHAIN_CW if int(round(float(cw))) == 1 else self._CHAIN_CCW)
 
+    def concrete_attempt_chain_for_collect(self, env_id: int, state: Dict[str, Any]):
+        # See open_door.py for rationale (captures wrong-direction t=0
+        # picks as failed stages in attempt_chain).
+        chains = getattr(self, "_window_attempt_chains", None)
+        statuses = getattr(self, "_window_stage_statuses", None)
+        if (
+            chains is not None and statuses is not None
+            and env_id < len(chains) and chains[env_id]
+        ):
+            return list(chains[env_id]), list(statuses[env_id])
+        return super().concrete_attempt_chain_for_collect(env_id, state)
+
     def per_env_extra_log_fields(
         self, env_id: int, episode_state: Dict[str, Any]
     ) -> Dict[str, Any]:
@@ -235,12 +247,36 @@ class OpenWindowManipulation(BaseManipulation) :
 
             handle_q = self.env.part_rigid_body_tensor[:, 3:7]
 
+            prev_op_for_env = [None] * self.env.num_envs
+            step_idx_for_env = [0] * self.env.num_envs
+            res_to_op = {
+                "r": "顺时针旋转把手",
+                "y": "逆时针旋转把手",
+                "x": "拉开窗户",
+            }
+            self._window_attempt_chains = [[] for _ in range(self.env.num_envs)]
+            self._window_stage_statuses = [[] for _ in range(self.env.num_envs)]
+            current_op = [None] * self.env.num_envs
+
+            def _stage_status_for_intermediate(env_id, op):
+                cw = int(self.env.clock_wise[env_id].item())
+                if op == "顺时针旋转把手":
+                    return cw == 1
+                if op == "逆时针旋转把手":
+                    return cw == 0
+                return False  # intermediate 拉开窗户 = failed pull
+
+            def _flush_stage(env_id, op, success):
+                self._window_attempt_chains[env_id].append(op)
+                self._window_stage_statuses[env_id].append(bool(success))
+
             for t in range(max_step):
                 cur_p = hand_pose[:, :3]
                 pre_p = cur_p.clone()
                 y_rotate_dir = quat_axis(handle_q, axis=0) # y-up
                 r_rotate_dir = -y_rotate_dir
                 open_dir = quat_axis(handle_q, axis=2)
+                res_per_env = []
                 for i in range(self.env.num_envs):
                     if policy == "succ":
                         res = self.succ_policy(i)
@@ -248,6 +284,7 @@ class OpenWindowManipulation(BaseManipulation) :
                         res = self.ada_policy(i, t, rotate_dof[i])
                     else:
                         raise NotImplementedError
+                    res_per_env.append(res)
                     if res == "x":
                         pre_p[i,:] += open_size * open_dir[i].squeeze(0)
                     elif res == "r":
@@ -264,6 +301,20 @@ class OpenWindowManipulation(BaseManipulation) :
                         obs = self.env.collect_single_diff_data(env_id)
                         pc, env_state = obs_wrapper(obs)
                         eps_buffer[env_id].add(pc, env_state, gt_pose[env_id])
+                        op = res_to_op.get(res_per_env[env_id])
+                        if op is not None:
+                            if prev_op_for_env[env_id] is None:
+                                current_op[env_id] = op
+                            elif prev_op_for_env[env_id] != op:
+                                _flush_stage(
+                                    env_id,
+                                    current_op[env_id],
+                                    _stage_status_for_intermediate(env_id, current_op[env_id]),
+                                )
+                                step_idx_for_env[env_id] += 1
+                                current_op[env_id] = op
+                            prev_op_for_env[env_id] = op
+                            self.append_frame_label_for(env_id, step_idx_for_env[env_id], op)
 
                 for j in range(15):
                     self.env.step(pred_pose)
@@ -272,6 +323,9 @@ class OpenWindowManipulation(BaseManipulation) :
                 self.env.actions = gt_pose
                 for env_id in range(self.env.num_envs):
                     if (torch.abs(self.env.one_dof_tensor[env_id, 0]) > np.pi/6).cpu().item() and not done_flag[env_id]:
+                        if current_op[env_id] is not None:
+                            _flush_stage(env_id, current_op[env_id], True)
+                            current_op[env_id] = None
                         demo_buffer.append(eps_buffer[env_id])
                         done_flag[env_id] = True
                         succ_cnt[env_id] += 1

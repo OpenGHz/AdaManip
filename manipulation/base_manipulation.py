@@ -726,9 +726,10 @@ class BaseManipulation:
 
         if answer not in {"y", "yes"}:
             raise RuntimeError(f"Aborted to avoid overwriting existing data at '{save_dir}'.")
-
-        shutil.rmtree(save_dir)
-
+        try:
+            shutil.rmtree(save_dir)
+        except FileNotFoundError as e:
+            pass
     # =====================================================================
     # Video recording wiring
     # =====================================================================

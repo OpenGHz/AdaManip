@@ -68,6 +68,21 @@ class OpenDoorManipulation(BaseManipulation) :
             "final_one_dof": float(self.env.one_dof_tensor[env_id, 0].item()),
         }
 
+    def concrete_attempt_chain_for_collect(self, env_id: int, state: Dict[str, Any]):
+        # Returns the per-env attempt_chain + stage_status built incrementally
+        # by collect_manip_data's state machine. Captures wrong-direction
+        # retries from ada_policy's random t=0 pick (e.g.
+        # ['顺时针旋转把手', '拉开门', '逆时针旋转把手', '拉开门'] with
+        # status [False, False, True, True]).
+        chains = getattr(self, "_door_attempt_chains", None)
+        statuses = getattr(self, "_door_stage_statuses", None)
+        if (
+            chains is not None and statuses is not None
+            and env_id < len(chains) and chains[env_id]
+        ):
+            return list(chains[env_id]), list(statuses[env_id])
+        return super().concrete_attempt_chain_for_collect(env_id, state)
+
     '''
     grasp net eval
     '''
@@ -197,12 +212,44 @@ class OpenDoorManipulation(BaseManipulation) :
             self.env.actions = init_actions
             ################start collect manip data#####################
             max_step = 30 if policy == "adaptive" else 25
+            prev_op_for_env = [None] * self.env.num_envs
+            step_idx_for_env = [0] * self.env.num_envs
+            res_to_op = {
+                "r": "顺时针旋转把手",
+                "y": "逆时针旋转把手",
+                "z": "拉开门",
+            }
+            # Per-env attempt_chain state machine (consumed by
+            # ``concrete_attempt_chain_for_collect``). Adjacent same-op
+            # frames collapse into one stage; stage flushes happen on op
+            # transition (intermediate failure) and at final success.
+            self._door_attempt_chains = [[] for _ in range(self.env.num_envs)]
+            self._door_stage_statuses = [[] for _ in range(self.env.num_envs)]
+            current_op = [None] * self.env.num_envs
+
+            def _stage_status_for_intermediate(env_id, op):
+                # Stage classified True iff its action advanced the task:
+                #   - rotate matches cw direction → True (real progress)
+                #   - rotate opposite to cw → False (wasted try)
+                #   - pull (intermediate) → False (we're moving on, so this
+                #     pull didn't trigger done_flag)
+                cw = int(self.env.clock_wise[env_id].item())
+                if op == "顺时针旋转把手":
+                    return cw == 1
+                if op == "逆时针旋转把手":
+                    return cw == 0
+                return False
+
+            def _flush_stage(env_id, op, success):
+                self._door_attempt_chains[env_id].append(op)
+                self._door_stage_statuses[env_id].append(bool(success))
             for t in range(max_step):
                 cur_p = hand_pose[:, :3]
                 cur_q = hand_pose[:,3:7]
                 pre_p = cur_p.clone()
                 pre_q = cur_q.clone()
 
+                res_per_env = []
                 for i in range(self.env.num_envs):
                     if policy == "succ":
                         res = self.succ_policy(i)
@@ -210,6 +257,7 @@ class OpenDoorManipulation(BaseManipulation) :
                         res = self.ada_policy(i, t, rotate_dof[i])
                     else:
                         raise NotImplementedError
+                    res_per_env.append(res)
                     if res == "z":
                         pre_p[i, :] += open_size*open_dir[i].squeeze(0)
                         pre_q[i, :] = hand_pose[i,3:7]
@@ -226,6 +274,23 @@ class OpenDoorManipulation(BaseManipulation) :
                         obs = self.env.collect_single_diff_data(env_id)
                         pc, env_state = obs_wrapper(obs)
                         eps_buffer[env_id].add(pc, env_state, gt_pose[env_id])
+                        op = res_to_op.get(res_per_env[env_id])
+                        if op is not None:
+                            if prev_op_for_env[env_id] is None:
+                                current_op[env_id] = op
+                            elif prev_op_for_env[env_id] != op:
+                                # Op transition. Flush previous stage as an
+                                # intermediate (failed-pull or wrong-rotation)
+                                # and start a new one.
+                                _flush_stage(
+                                    env_id,
+                                    current_op[env_id],
+                                    _stage_status_for_intermediate(env_id, current_op[env_id]),
+                                )
+                                step_idx_for_env[env_id] += 1
+                                current_op[env_id] = op
+                            prev_op_for_env[env_id] = op
+                            self.append_frame_label_for(env_id, step_idx_for_env[env_id], op)
 
                 for j in range(15):
                     self.env.step(pred_pose)
@@ -234,6 +299,10 @@ class OpenDoorManipulation(BaseManipulation) :
                 self.env.actions = gt_pose
                 for env_id in range(self.env.num_envs):
                     if (torch.abs(self.env.one_dof_tensor[env_id, 0]) > np.pi/6).cpu().item() and not done_flag[env_id]:
+                        # Final stage triggered success — must be 拉开门.
+                        if current_op[env_id] is not None:
+                            _flush_stage(env_id, current_op[env_id], True)
+                            current_op[env_id] = None
                         demo_buffer.append(eps_buffer[env_id])
                         done_flag[env_id] = True
                         print(f"Env {env_id} Succeeded")

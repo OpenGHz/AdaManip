@@ -77,6 +77,42 @@ class OpenSafeManipulation(BaseManipulation) :
             "final_one_dof": float(self.env.one_dof_tensor[env_id, 0].item()),
         }
 
+    def concrete_attempt_chain_for_collect(self, env_id: int, state: Dict[str, Any]):
+        # Reconstruct attempt_chain from per-env frame records (populated
+        # via set_current_step + process_data → append_frame_label). Each
+        # contiguous run of identical step_operation collapses into one
+        # stage; status is derived from cw (rotate matches cw → True;
+        # intermediate pull → False; final stage → True).
+        records = self._episode_frame_records
+        if records is None or env_id >= len(records) or not records[env_id]:
+            return super().concrete_attempt_chain_for_collect(env_id, state)
+        attempt = []
+        last_op = None
+        for fr in records[env_id]:
+            op = fr.get("step_operation")
+            if not op:
+                continue
+            if op != last_op:
+                attempt.append(op)
+                last_op = op
+        if not attempt:
+            return super().concrete_attempt_chain_for_collect(env_id, state)
+        cw = int(round(float(state.get("clock_wise", 0)))) if state else None
+        statuses = []
+        for i, op in enumerate(attempt):
+            is_last = (i == len(attempt) - 1)
+            if is_last:
+                statuses.append(True)
+            elif op == "拉门":
+                statuses.append(False)
+            elif op == "顺时针旋转旋钮":
+                statuses.append(cw == 1)
+            elif op == "逆时针旋转旋钮":
+                statuses.append(cw == 2)
+            else:
+                statuses.append(False)
+        return attempt, statuses
+
     '''
     test env
     '''
@@ -256,6 +292,11 @@ class OpenSafeManipulation(BaseManipulation) :
             knob_pos[:,0] -= 0.002
             if policy == "succ":
                 if self.env.clock_wise[0]: # locked
+                    cw_root = int(self.env.clock_wise[0].item())
+                    rotate_op = "顺时针旋转旋钮" if cw_root == 1 else "逆时针旋转旋钮"
+                    # All approach / grasp / rotate-knob frames belong to the
+                    # rotate-knob stage (step_index 0).
+                    self.set_current_step(0, rotate_op)
                     self.env.gripper = torch.zeros((self.env.num_envs,1), device=self.env.device)
                     for i in range(2):
                         self.process_data(self.env.hand_rigid_body_tensor[:,:7])
@@ -268,19 +309,19 @@ class OpenSafeManipulation(BaseManipulation) :
                         self.process_data(knob_pos)
                         for j in range(15):
                             self.env.step(knob_pos)
-                    
+
                     knob_pos[:, 0] -= self.env.gripper_length
                     for i in range(2):
                         self.process_data(knob_pos)
                         for j in range(15):
                             self.env.step(knob_pos)
-                    
+
                     self.env.gripper = torch.ones((self.env.num_envs,1), device=self.env.device)
                     for i in range(2):
                         self.process_data(knob_pos)
                         for j in range(15):
-                            self.env.step(knob_pos) 
-                    
+                            self.env.step(knob_pos)
+
                     # rotate knob
                     for i in range(5):
                         cur_p = self.env.hand_rigid_body_tensor[:, :3]
@@ -299,6 +340,8 @@ class OpenSafeManipulation(BaseManipulation) :
                         for j in range(15):
                             self.env.step(pred_pose)
 
+                    # Transition to the pull-door stage (step_index 1).
+                    self.set_current_step(1, "拉门")
                     self.env.gripper = torch.zeros((self.env.num_envs,1), device=self.env.device)
                     for i in range(2):
                         self.process_data(self.env.hand_rigid_body_tensor[:,:7])
@@ -323,7 +366,7 @@ class OpenSafeManipulation(BaseManipulation) :
                         self.process_data(handle_pos)
                         for j in range(15):
                             self.env.step(handle_pos)
-                    
+
                     down_q = torch.stack(self.env.num_envs * [torch.tensor([0, 1, 0, 0])]).to(self.env.device).view((self.env.num_envs, 4))
                     step_size = 0.04
                     for i in range(10):
@@ -337,6 +380,8 @@ class OpenSafeManipulation(BaseManipulation) :
                         for j in range(15):
                             self.env.step(pred_pose)
                 else:
+                    # cw=0 (unlocked): direct pull-door, single stage.
+                    self.set_current_step(0, "拉门")
                     self.env.gripper = torch.zeros((self.env.num_envs,1), device=self.env.device)
                     for i in range(2):
                         self.process_data(self.env.hand_rigid_body_tensor[:,:7])
@@ -349,7 +394,7 @@ class OpenSafeManipulation(BaseManipulation) :
                         self.process_data(init_handle_pos)
                         for j in range(15):
                             self.env.step(init_handle_pos)
-                    
+
                     init_handle_pos[:, 0] -= self.env.gripper_length
                     for i in range(3):
                         self.process_data(init_handle_pos)
@@ -382,6 +427,10 @@ class OpenSafeManipulation(BaseManipulation) :
                         print(f"Env {env_id} Succeeded")
 
             else:
+                # adaptive demo: starts by attempting pull (whether
+                # start_with_pull is True or False, the demo first goes
+                # for the handle). Default phase = pull.
+                self.set_current_step(0, "拉门")
                 self.env.gripper = torch.zeros((self.env.num_envs,1), device=self.env.device)
                 for i in range(2):
                     self.process_data(self.env.hand_rigid_body_tensor[:,:7])
@@ -395,7 +444,7 @@ class OpenSafeManipulation(BaseManipulation) :
                     self.process_data(init_handle_pos)
                     for j in range(15):
                         self.env.step(init_handle_pos)
-                
+
                 # move to handle
                 init_handle_pos[:, 0] -= self.env.gripper_length
                 for i in range(3):
@@ -409,7 +458,7 @@ class OpenSafeManipulation(BaseManipulation) :
                     self.process_data(init_handle_pos)
                     for j in range(15):
                         self.env.step(init_handle_pos)
-                
+
                 # open door
                 down_q = torch.stack(self.env.num_envs * [torch.tensor([0, 1, 0, 0])]).to(self.env.device).view((self.env.num_envs, 4))
                 step_size = 0.04
@@ -423,11 +472,11 @@ class OpenSafeManipulation(BaseManipulation) :
                         pred_p = cur_p + open_dir * step_size
                         pred_q = quat_mul(handle_q, down_q)
                         pred_pose = torch.cat([pred_p, pred_q], dim=-1).float()
-                        
+
                         self.process_data(pred_pose)
                         for j in range(15):
                             self.env.step(pred_pose)
-                
+
                 if start_with_pull and not self.env.clock_wise[0]:
                     # open door directly
                     for i in range(8):
@@ -442,6 +491,12 @@ class OpenSafeManipulation(BaseManipulation) :
                         for j in range(15):
                             self.env.step(pred_pose)
                 else:
+                    # First pull attempt failed (locked) — fall back to
+                    # rotate-knob. attempt_chain becomes
+                    # [拉门(failed), {direction}旋转旋钮, 拉门].
+                    cw_root = int(self.env.clock_wise[0].item())
+                    rotate_op = "顺时针旋转旋钮" if cw_root == 1 else "逆时针旋转旋钮"
+                    self.set_current_step(1, rotate_op)
                     self.env.gripper = torch.zeros((self.env.num_envs,1), device=self.env.device)
 
                     self.open_eps_buffer = [Episode_Buffer() for _ in range(self.env.num_envs)]
@@ -457,19 +512,19 @@ class OpenSafeManipulation(BaseManipulation) :
                         self.process_data(knob_pos)
                         for j in range(15):
                             self.env.step(knob_pos)
-                    
+
                     knob_pos[:, 0] -= self.env.gripper_length
                     for i in range(2):
                         self.process_data(knob_pos)
                         for j in range(15):
                             self.env.step(knob_pos)
-                    
+
                     self.env.gripper = torch.ones((self.env.num_envs,1), device=self.env.device)
                     for i in range(2):
                         self.process_data(knob_pos)
                         for j in range(15):
                             self.env.step(knob_pos)
-                
+
                     # rotate knob
                     for t in range(6):
                         cur_p = self.env.hand_rigid_body_tensor[:, :3]
@@ -491,12 +546,15 @@ class OpenSafeManipulation(BaseManipulation) :
                         for j in range(15):
                             self.env.step(pred_pose)
                     
+                    # After rotate-knob, transition back to pull-door
+                    # (final stage 2 in this 3-stage attempt).
+                    self.set_current_step(2, "拉门")
                     self.env.gripper = torch.zeros((self.env.num_envs,1), device=self.env.device)
                     for i in range(2):
                         self.process_data(self.env.hand_rigid_body_tensor[:,:7])
                         for j in range(15):
                             self.env.step(self.env.hand_rigid_body_tensor[:,:7])
-                    
+
                     # grasp handle
                     handle_pos[:, 0] += self.env.gripper_length*2
                     for i in range(3):
@@ -515,7 +573,7 @@ class OpenSafeManipulation(BaseManipulation) :
                         self.process_data(handle_pos)
                         for j in range(15):
                             self.env.step(handle_pos)
-                    
+
                     # open door
                     for i in range(10):
                         handle_q = self.env.rigid_body_tensor[:, 3:7]

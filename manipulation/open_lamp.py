@@ -85,6 +85,19 @@ class OpenLampManipulation(BaseManipulation) :
             "final_one_dof": float(self.env.one_dof_tensor[env_id, 0].item()),
             "final_two_dof": float(self.env.two_dof_tensor[env_id, 0].item()),
         }
+
+    def concrete_attempt_chain_for_collect(self, env_id: int, state: Dict[str, Any]):
+        # Lamp's ada_policy randomly picks one of {push, cw rotate, ccw
+        # rotate} at t=0 and switches if the first pick wasn't cw-correct.
+        # attempt_chain captures those retries.
+        chains = getattr(self, "_lamp_attempt_chains", None)
+        statuses = getattr(self, "_lamp_stage_statuses", None)
+        if (
+            chains is not None and statuses is not None
+            and env_id < len(chains) and chains[env_id]
+        ):
+            return list(chains[env_id]), list(statuses[env_id])
+        return super().concrete_attempt_chain_for_collect(env_id, state)
     '''
     test env
     '''
@@ -258,12 +271,40 @@ class OpenLampManipulation(BaseManipulation) :
             init_actions = self.action_process(hand_pose)
             self.env.actions = init_actions
             ####################start collect manipulation data###################
+            prev_op_for_env = [None] * self.env.num_envs
+            step_idx_for_env = [0] * self.env.num_envs
+            res_to_op = {
+                "z": "推开关",
+                "r": "顺时针旋转开关",
+                "y": "逆时针旋转开关",
+            }
+            self._lamp_attempt_chains = [[] for _ in range(self.env.num_envs)]
+            self._lamp_stage_statuses = [[] for _ in range(self.env.num_envs)]
+            current_op = [None] * self.env.num_envs
+
+            def _stage_status_for_intermediate(env_id, op):
+                # Lamp success criterion is op-vs-cw match:
+                #   cw=1 → 推开关 / cw=2 → 逆时针旋转 / cw=3 → 顺时针旋转
+                cw = int(self.env.clock_wise[env_id].item())
+                if op == "推开关":
+                    return cw == 1
+                if op == "逆时针旋转开关":
+                    return cw == 2
+                if op == "顺时针旋转开关":
+                    return cw == 3
+                return False
+
+            def _flush_stage(env_id, op, success):
+                self._lamp_attempt_chains[env_id].append(op)
+                self._lamp_stage_statuses[env_id].append(bool(success))
+
             for t in range(max_step):
                 cur_p = hand_pose[:, :3]
                 cur_q = hand_pose[:,3:7]
                 pre_p = cur_p.clone()
                 pre_q = cur_q.clone()
 
+                res_per_env = []
                 for i in range(self.env.num_envs):
                     if policy == "succ":
                         res = self.succ_policy(i)
@@ -271,6 +312,7 @@ class OpenLampManipulation(BaseManipulation) :
                         res = self.ada_policy(i, t, chose_list[i])
                     else:
                         raise NotImplementedError
+                    res_per_env.append(res)
                     if res == "z":
                         pre_p[i,2] -= primitive_action_step
                     elif res == "r":
@@ -286,6 +328,20 @@ class OpenLampManipulation(BaseManipulation) :
                         obs = self.env.collect_single_diff_data(env_id)
                         pc, env_state = obs_wrapper(obs)
                         eps_buffer[env_id].add(pc, env_state, gt_pose[env_id])
+                        op = res_to_op.get(res_per_env[env_id])
+                        if op is not None:
+                            if prev_op_for_env[env_id] is None:
+                                current_op[env_id] = op
+                            elif prev_op_for_env[env_id] != op:
+                                _flush_stage(
+                                    env_id,
+                                    current_op[env_id],
+                                    _stage_status_for_intermediate(env_id, current_op[env_id]),
+                                )
+                                step_idx_for_env[env_id] += 1
+                                current_op[env_id] = op
+                            prev_op_for_env[env_id] = op
+                            self.append_frame_label_for(env_id, step_idx_for_env[env_id], op)
 
                 for j in range(15):
                     self.env.step(pred_pose)
@@ -298,12 +354,18 @@ class OpenLampManipulation(BaseManipulation) :
                     if not done_flag[env_id]:
                         if self.env.clock_wise[env_id] == 1:
                             if torch.abs(self.env.one_dof_tensor[env_id, 0]) > 0.007:
+                                if current_op[env_id] is not None:
+                                    _flush_stage(env_id, current_op[env_id], True)
+                                    current_op[env_id] = None
                                 demo_buffer.append(eps_buffer[env_id])
                                 done_flag[env_id] = True
                                 succ_cnt[env_id] += 1
                                 print(f"Env {env_id} Succeeded")
                         else:
                             if torch.abs(self.env.two_dof_tensor[env_id, 0]) > torch.abs(self.env.two_flag[env_id]):
+                                if current_op[env_id] is not None:
+                                    _flush_stage(env_id, current_op[env_id], True)
+                                    current_op[env_id] = None
                                 demo_buffer.append(eps_buffer[env_id])
                                 done_flag[env_id] = True
                                 succ_cnt[env_id] += 1
