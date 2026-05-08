@@ -1,1 +1,1 @@
-python run.py --task=OpenMicroWave --controller=GtController --manipulation=OpenMicroWaveManipulation --sim_device=cuda:0 --seed=0 --pipeline=gpu --cfg_env=cfg/microwave/collect_mv.yaml
+python run.py --task=OpenMicroWave --controller=GtController --manipulation=OpenMicroWaveManipulation --sim_device=cuda:0 --seed=0 --pipeline=gpu --cfg_env=cfg/microwave/collect_mv.yaml --headless

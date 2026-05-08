@@ -1,1 +1,1 @@
-python run.py --task=OpenSafe --controller=GtController --manipulation=OpenSafeManipulation --sim_device=cuda:0 --seed=2 --pipeline=gpu --cfg_env=cfg/safe/collect_safe.yaml
+python run.py --task=OpenSafe --controller=GtController --manipulation=OpenSafeManipulation --sim_device=cuda:0 --seed=2 --pipeline=gpu --cfg_env=cfg/safe/collect_safe.yaml --headless

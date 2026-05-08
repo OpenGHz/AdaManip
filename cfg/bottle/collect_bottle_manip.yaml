@@ -23,9 +23,17 @@ env:
   collectData: True
   collect_all: True
   collectPC: False
+  collectRGBVideo: True
   collectForce: True
   visualizePointcloud: False
   PointDownSampleNum: 4096
+  rgbVideo:
+    cameraType: fixed
+    cameraIds: [1]
+    fps: 10
+    codec: libx264
+    crf: 18
+    preset: fast
 
   reset:
     bottle:
