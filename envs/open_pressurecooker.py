@@ -446,7 +446,7 @@ class OpenPressureCooker(BaseEnv):
     def init_obj_dof_state(self, env_id):
         door_type = env_id // self.env_per_asset
         dof_props = self.gym.get_asset_dof_properties(self.asset_list[door_type])
-        if self.task == "open_pressurecooker":
+        if self.task in ("open_pressurecooker", "open_pressurecooker_one_go"):
             dof_props['damping'][0] = 40.0
             dof_props['upper'][0] = 0.0
             limit_random = self.cfg['env']['asset']['limit_random']

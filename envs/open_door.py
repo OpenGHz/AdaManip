@@ -446,7 +446,7 @@ class OpenDoor(BaseEnv):
         door_type = env_id // self.env_per_asset
         dof_props = self.gym.get_asset_dof_properties(self.asset_list[door_type])
         # print(dof_props['lower'][1], dof_props['upper'][1])
-        if self.task == "open_door":
+        if self.task in ("open_door", "open_door_one_go"):
             dof_props['upper'][0] = 0.0
             limit_random = self.cfg['env']['asset']['limit_random']
             override = getattr(self, "_clock_wise_override", None)

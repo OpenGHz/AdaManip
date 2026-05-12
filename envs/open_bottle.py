@@ -466,7 +466,7 @@ class OpenBottle(BaseEnv):
         door_type = env_id // self.env_per_asset
         dof_props = self.gym.get_asset_dof_properties(self.asset_list[door_type])
         # print(dof_props['lower'][1], dof_props['upper'][1])
-        if self.task == "open_bottle":
+        if self.task in ("open_bottle", "open_bottle_one_go"):
             dof_props['damping'][0] = 100.0
             dof_props['upper'][0] = 0.0
             limit_random = self.cfg['env']['asset']['limit_random']
