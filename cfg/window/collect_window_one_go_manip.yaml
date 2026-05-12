@@ -1,7 +1,7 @@
 task:
   task_name: "open_window_one_go"
   policy: "adaptive"
-  num_episode: 1
+  num_episode: 20
   num_eval_episode: 1
   grasp: False
   # one_go variant: env.open_stage_scale is lowered so a single rotation step

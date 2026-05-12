@@ -1,6 +1,6 @@
 task:
   task_name: "open_pressurecooker_one_go"
-  num_episode: 1
+  num_episode: 20
   num_eval_episode: 10
   policy: "adaptive"
   grasp: False
