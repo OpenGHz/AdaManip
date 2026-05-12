@@ -427,154 +427,250 @@ class OpenSafeManipulation(BaseManipulation) :
                         print(f"Env {env_id} Succeeded")
 
             else:
-                # adaptive demo: starts by attempting pull (whether
-                # start_with_pull is True or False, the demo first goes
-                # for the handle). Default phase = pull.
-                self.set_current_step(0, "拉门")
-                self.env.gripper = torch.zeros((self.env.num_envs,1), device=self.env.device)
-                for i in range(2):
-                    self.process_data(self.env.hand_rigid_body_tensor[:,:7])
-                    for j in range(15):
-                        self.env.step(self.env.hand_rigid_body_tensor[:,:7])
-
-                # grasp handle
-                init_handle_pos = handle_pos.clone()
-                init_handle_pos[:, 0] += self.env.gripper_length*2
-                for i in range(4):
-                    self.process_data(init_handle_pos)
-                    for j in range(15):
-                        self.env.step(init_handle_pos)
-
-                # move to handle
-                init_handle_pos[:, 0] -= self.env.gripper_length
-                for i in range(3):
-                    self.process_data(init_handle_pos)
-                    for j in range(15):
-                        self.env.step(init_handle_pos)
-
-                # close gripper
-                self.env.gripper = torch.ones((self.env.num_envs,1), device=self.env.device)
-                for i in range(2):
-                    self.process_data(init_handle_pos)
-                    for j in range(15):
-                        self.env.step(init_handle_pos)
-
-                # open door
+                # ===== Adaptive policy (per tasks.md) =====
+                # Initial action is randomly drawn from
+                # {Pull Door, Clockwise Rotate Knob, Counterclockwise Rotate Knob}.
+                # All envs in an episode share one initial_choice
+                # (clock_same=True keeps cw_root consistent across envs).
+                #
+                # Caveat: cw=0 (unlocked) envs auto-LOCK if the knob is
+                # rotated (refresh_mechanism's update_close_index path), so
+                # we force pull-first whenever env-0's cw is 0.
                 down_q = torch.stack(self.env.num_envs * [torch.tensor([0, 1, 0, 0])]).to(self.env.device).view((self.env.num_envs, 4))
                 step_size = 0.04
-                start_with_pull = np.random.rand() < 0.5
-
-                if start_with_pull:
-                    for i in range(2):
-                        handle_q = self.env.rigid_body_tensor[:, 3:7]
-                        open_dir = quat_axis(handle_q, axis=2)
-                        cur_p = self.env.hand_rigid_body_tensor[:, :3]
-                        pred_p = cur_p + open_dir * step_size
-                        pred_q = quat_mul(handle_q, down_q)
-                        pred_pose = torch.cat([pred_p, pred_q], dim=-1).float()
-
-                        self.process_data(pred_pose)
-                        for j in range(15):
-                            self.env.step(pred_pose)
-
-                if start_with_pull and not self.env.clock_wise[0]:
-                    # open door directly
-                    for i in range(8):
-                        handle_q = self.env.rigid_body_tensor[:, 3:7]
-                        open_dir = quat_axis(handle_q, axis=2)
-                        cur_p = self.env.hand_rigid_body_tensor[:, :3]
-                        pred_p = cur_p + open_dir * step_size
-                        pred_q = quat_mul(handle_q, down_q)
-                        pred_pose = torch.cat([pred_p, pred_q], dim=-1).float()
-                        
-                        self.process_data(pred_pose)
-                        for j in range(15):
-                            self.env.step(pred_pose)
+                cw_root = int(self.env.clock_wise[0].item())
+                if cw_root == 0:
+                    initial_choice = "pull"
                 else:
-                    # First pull attempt failed (locked) — fall back to
-                    # rotate-knob. attempt_chain becomes
-                    # [拉门(failed), {direction}旋转旋钮, 拉门].
-                    cw_root = int(self.env.clock_wise[0].item())
-                    rotate_op = "顺时针旋转旋钮" if cw_root == 1 else "逆时针旋转旋钮"
-                    self.set_current_step(1, rotate_op)
+                    # Re-balance for the cw=0 → forced "pull" path: cw=0
+                    # episodes already contribute (1 - p_lock) to P(pull),
+                    # so when cw>0 we bias toward rotate-first to make the
+                    # global first-action distribution as close to
+                    # uniform 1/3 each as the cfg permits.
+                    #
+                    # Solve P(pull) = (1 - p_lock) + p_lock * w_pull = 1/3
+                    #  → w_pull = max(0, (1/3 - (1 - p_lock)) / p_lock)
+                    # When p_lock < 2/3 the equation has no non-negative
+                    # solution → w_pull clamps to 0 (always rotate-first
+                    # when locked) and best-effort balance is achieved.
+                    p_lock = float(self.cfg["env"].get("clockwise", 0.5))
+                    if p_lock > 0:
+                        w_pull = max(0.0, (1.0 / 3 - (1.0 - p_lock)) / p_lock)
+                        w_pull = min(1.0, w_pull)
+                    else:
+                        w_pull = 0.0
+                    w_rot = (1.0 - w_pull) / 2.0
+                    initial_choice = np.random.choice(
+                        ["pull", "cw", "ccw"],
+                        p=[w_pull, w_rot, w_rot],
+                    )
+
+                if initial_choice == "pull":
+                    self.set_current_step(0, "拉门")
                     self.env.gripper = torch.zeros((self.env.num_envs,1), device=self.env.device)
-
-                    self.open_eps_buffer = [Episode_Buffer() for _ in range(self.env.num_envs)]
-
                     for i in range(2):
                         self.process_data(self.env.hand_rigid_body_tensor[:,:7])
                         for j in range(15):
                             self.env.step(self.env.hand_rigid_body_tensor[:,:7])
+                    init_handle_pos = handle_pos.clone()
+                    init_handle_pos[:, 0] += self.env.gripper_length*2
+                    for i in range(4):
+                        self.process_data(init_handle_pos)
+                        for j in range(15):
+                            self.env.step(init_handle_pos)
+                    init_handle_pos[:, 0] -= self.env.gripper_length
+                    for i in range(3):
+                        self.process_data(init_handle_pos)
+                        for j in range(15):
+                            self.env.step(init_handle_pos)
+                    self.env.gripper = torch.ones((self.env.num_envs,1), device=self.env.device)
+                    for i in range(2):
+                        self.process_data(init_handle_pos)
+                        for j in range(15):
+                            self.env.step(init_handle_pos)
+                    # First pull attempt (2 iters).
+                    for i in range(2):
+                        handle_q = self.env.rigid_body_tensor[:, 3:7]
+                        open_dir = quat_axis(handle_q, axis=2)
+                        cur_p = self.env.hand_rigid_body_tensor[:, :3]
+                        pred_p = cur_p + open_dir * step_size
+                        pred_q = quat_mul(handle_q, down_q)
+                        pred_pose = torch.cat([pred_p, pred_q], dim=-1).float()
+                        self.process_data(pred_pose)
+                        for j in range(15):
+                            self.env.step(pred_pose)
+                    if cw_root == 0:
+                        # Unlocked: continue pulling to open the door.
+                        for i in range(8):
+                            handle_q = self.env.rigid_body_tensor[:, 3:7]
+                            open_dir = quat_axis(handle_q, axis=2)
+                            cur_p = self.env.hand_rigid_body_tensor[:, :3]
+                            pred_p = cur_p + open_dir * step_size
+                            pred_q = quat_mul(handle_q, down_q)
+                            pred_pose = torch.cat([pred_p, pred_q], dim=-1).float()
+                            self.process_data(pred_pose)
+                            for j in range(15):
+                                self.env.step(pred_pose)
+                    else:
+                        # Locked → rotate-knob (per-env cw-correct so all
+                        # envs unlock regardless of cw=1 vs cw=2 split from
+                        # init_obj_dof_state) → re-grasp handle → pull.
+                        rotate_op = "顺时针旋转旋钮" if cw_root == 1 else "逆时针旋转旋钮"
+                        self.set_current_step(1, rotate_op)
+                        self.env.gripper = torch.zeros((self.env.num_envs,1), device=self.env.device)
+                        for i in range(2):
+                            self.process_data(self.env.hand_rigid_body_tensor[:,:7])
+                            for j in range(15):
+                                self.env.step(self.env.hand_rigid_body_tensor[:,:7])
+                        knob_pos[:, 0] += self.env.gripper_length*2
+                        for i in range(2):
+                            self.process_data(knob_pos)
+                            for j in range(15):
+                                self.env.step(knob_pos)
+                        knob_pos[:, 0] -= self.env.gripper_length
+                        for i in range(2):
+                            self.process_data(knob_pos)
+                            for j in range(15):
+                                self.env.step(knob_pos)
+                        self.env.gripper = torch.ones((self.env.num_envs,1), device=self.env.device)
+                        for i in range(2):
+                            self.process_data(knob_pos)
+                            for j in range(15):
+                                self.env.step(knob_pos)
+                        for _ in range(6):
+                            cur_p = self.env.hand_rigid_body_tensor[:, :3]
+                            cur_q = self.env.hand_rigid_body_tensor[:,3:7]
+                            for i in range(self.env.num_envs):
+                                if self.env.clock_wise[i] == 1:
+                                    cur_q[i] = quat_mul(cur_q[i], rot_quat)
+                                else:
+                                    cur_q[i] = quat_mul(cur_q[i], s_rot_quat)
+                            pred_pose = torch.cat([cur_p, cur_q], dim=-1).float()
+                            self.process_data(pred_pose)
+                            for j in range(15):
+                                self.env.step(pred_pose)
+                        self.set_current_step(2, "拉门")
+                        self.env.gripper = torch.zeros((self.env.num_envs,1), device=self.env.device)
+                        for i in range(2):
+                            self.process_data(self.env.hand_rigid_body_tensor[:,:7])
+                            for j in range(15):
+                                self.env.step(self.env.hand_rigid_body_tensor[:,:7])
+                        handle_pos[:, 0] += self.env.gripper_length*2
+                        for i in range(3):
+                            self.process_data(handle_pos)
+                            for j in range(15):
+                                self.env.step(handle_pos)
+                        handle_pos[:, 0] -= self.env.gripper_length
+                        for i in range(2):
+                            self.process_data(handle_pos)
+                            for j in range(15):
+                                self.env.step(handle_pos)
+                        self.env.gripper = torch.ones((self.env.num_envs,1), device=self.env.device)
+                        for i in range(2):
+                            self.process_data(handle_pos)
+                            for j in range(15):
+                                self.env.step(handle_pos)
+                        for i in range(10):
+                            handle_q = self.env.rigid_body_tensor[:, 3:7]
+                            open_dir = quat_axis(handle_q, axis=2)
+                            cur_p = self.env.hand_rigid_body_tensor[:, :3]
+                            pred_p = cur_p + open_dir * step_size
+                            pred_q = quat_mul(handle_q, down_q)
+                            pred_pose = torch.cat([pred_p, pred_q], dim=-1).float()
+                            self.process_data(pred_pose)
+                            for j in range(15):
+                                self.env.step(pred_pose)
+                else:
+                    # initial_choice in {"cw", "ccw"} (rotate-first).
+                    # Approach knob → rotate chosen direction → (if chosen
+                    # didn't match cw_root, switch direction) → re-grasp
+                    # handle → pull.
+                    #
+                    # Whether the switch happens depends on `chosen_matches`
+                    # (chosen direction == env-0's cw value). With env-side
+                    # clock_same syncing both clock_wise and DOF direction,
+                    # all envs in this episode share cw_root, so the same
+                    # decision applies to every env. When chosen matches →
+                    # attempt_chain = [chosen, 拉门]; otherwise →
+                    # [chosen, other, 拉门].
+                    chosen_op = "顺时针旋转旋钮" if initial_choice == "cw" else "逆时针旋转旋钮"
+                    other_op = "逆时针旋转旋钮" if initial_choice == "cw" else "顺时针旋转旋钮"
+                    chosen_quat = rot_quat if initial_choice == "cw" else s_rot_quat
+                    other_quat = s_rot_quat if initial_choice == "cw" else rot_quat
+                    chosen_matches = (
+                        (initial_choice == "cw" and cw_root == 1)
+                        or (initial_choice == "ccw" and cw_root == 2)
+                    )
 
-                    # grasp knob
+                    self.set_current_step(0, chosen_op)
+                    self.env.gripper = torch.zeros((self.env.num_envs,1), device=self.env.device)
+                    for i in range(2):
+                        self.process_data(self.env.hand_rigid_body_tensor[:,:7])
+                        for j in range(15):
+                            self.env.step(self.env.hand_rigid_body_tensor[:,:7])
                     knob_pos[:, 0] += self.env.gripper_length*2
                     for i in range(2):
                         self.process_data(knob_pos)
                         for j in range(15):
                             self.env.step(knob_pos)
-
                     knob_pos[:, 0] -= self.env.gripper_length
                     for i in range(2):
                         self.process_data(knob_pos)
                         for j in range(15):
                             self.env.step(knob_pos)
-
                     self.env.gripper = torch.ones((self.env.num_envs,1), device=self.env.device)
                     for i in range(2):
                         self.process_data(knob_pos)
                         for j in range(15):
                             self.env.step(knob_pos)
-
-                    # rotate knob
-                    for t in range(6):
+                    # Phase 0: rotate chosen direction.
+                    for _ in range(6):
                         cur_p = self.env.hand_rigid_body_tensor[:, :3]
                         cur_q = self.env.hand_rigid_body_tensor[:,3:7]
-                        pred_p = cur_p
                         for i in range(self.env.num_envs):
-                            if t == 0:
-                                if np.random.rand() > 0.5:
-                                    cur_q[i] = quat_mul(cur_q[i], rot_quat)
-                                else:
-                                    cur_q[i] = quat_mul(cur_q[i], s_rot_quat)
-                            else:
-                                if self.env.clock_wise[i] == 1:
-                                    cur_q[i] = quat_mul(cur_q[i], rot_quat)
-                                else:
-                                    cur_q[i] = quat_mul(cur_q[i], s_rot_quat)
-                        pred_pose = torch.cat([pred_p, cur_q], dim=-1).float()
+                            cur_q[i] = quat_mul(cur_q[i], chosen_quat)
+                        pred_pose = torch.cat([cur_p, cur_q], dim=-1).float()
                         self.process_data(pred_pose)
                         for j in range(15):
                             self.env.step(pred_pose)
-                    
-                    # After rotate-knob, transition back to pull-door
-                    # (final stage 2 in this 3-stage attempt).
-                    self.set_current_step(2, "拉门")
+                    if not chosen_matches:
+                        # Phase 1: switch to other direction (only when the
+                        # chosen direction failed to unlock).
+                        self.set_current_step(1, other_op)
+                        for _ in range(6):
+                            cur_p = self.env.hand_rigid_body_tensor[:, :3]
+                            cur_q = self.env.hand_rigid_body_tensor[:,3:7]
+                            for i in range(self.env.num_envs):
+                                cur_q[i] = quat_mul(cur_q[i], other_quat)
+                            pred_pose = torch.cat([cur_p, cur_q], dim=-1).float()
+                            self.process_data(pred_pose)
+                            for j in range(15):
+                                self.env.step(pred_pose)
+                        pull_step = 2
+                    else:
+                        pull_step = 1
+                    # Final stage: re-grasp handle and pull.
+                    self.set_current_step(pull_step, "拉门")
                     self.env.gripper = torch.zeros((self.env.num_envs,1), device=self.env.device)
                     for i in range(2):
                         self.process_data(self.env.hand_rigid_body_tensor[:,:7])
                         for j in range(15):
                             self.env.step(self.env.hand_rigid_body_tensor[:,:7])
-
-                    # grasp handle
                     handle_pos[:, 0] += self.env.gripper_length*2
                     for i in range(3):
                         self.process_data(handle_pos)
                         for j in range(15):
                             self.env.step(handle_pos)
-
                     handle_pos[:, 0] -= self.env.gripper_length
                     for i in range(2):
                         self.process_data(handle_pos)
                         for j in range(15):
                             self.env.step(handle_pos)
-
                     self.env.gripper = torch.ones((self.env.num_envs,1), device=self.env.device)
                     for i in range(2):
                         self.process_data(handle_pos)
                         for j in range(15):
                             self.env.step(handle_pos)
-
-                    # open door
                     for i in range(10):
                         handle_q = self.env.rigid_body_tensor[:, 3:7]
                         open_dir = quat_axis(handle_q, axis=2)

@@ -13,7 +13,7 @@ env:
   numActions: 10
   envSpacing: 2.0
   horizon: 40
-  clockwise: 0.55
+  clockwise: 0.667
   randomPose: 0.00
   pc_normalize: True
   actionSpeedScale: 20

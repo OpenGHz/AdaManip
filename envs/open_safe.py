@@ -86,6 +86,11 @@ class OpenSafe(BaseEnv):
         self.dof_upper_limits_tensor = torch.zeros((self.asset_num, 3), device=self.device)
         self.mechanism_flag = torch.zeros((self.env_num,),device = self.device)
         self.clock_wise = torch.zeros((self.env_num,), device=self.device)
+        # When clock_same=True at reset, all envs in the episode share the
+        # same knob DOF direction (positive vs negative range) so that
+        # cw_root computed from env 0 also reflects every other env's cw.
+        # None = fall back to per-env random direction (legacy behavior).
+        self._episode_pos_dof_dir = None
         self.knob_goalpos_offset_tensor = torch.zeros((self.asset_num, 3), device=self.device)
         self.handle_goalpos_offset_tensor = torch.zeros((self.asset_num, 3), device=self.device)
 
@@ -472,7 +477,11 @@ class OpenSafe(BaseEnv):
             dof_props['stiffness'].fill(0.0)
             dof_props['damping'].fill(0.0)
             dof_props['effort'].fill(0.0)
-            if np.random.rand() > 0.5:
+            if self._episode_pos_dof_dir is not None:
+                use_positive = self._episode_pos_dof_dir
+            else:
+                use_positive = bool(np.random.rand() > 0.5)
+            if use_positive:
                 dof_props["upper"][1] = random_upper
                 dof_props["lower"][1] = 0.0
             else:
@@ -680,6 +689,13 @@ class OpenSafe(BaseEnv):
             self.clock_wise = torch.zeros((self.env_num,), device=self.device) + (rand_num < self.cfg["env"]["clockwise"])
         else:
             self.clock_wise = torch.zeros((self.env_num,), device=self.device) + torch.tensor(np.random.rand(self.env_num) < self.cfg["env"]["clockwise"]).to(self.device)
+        # When clock_same=True (and no explicit override), also sync the
+        # knob DOF direction across envs so cw_root computed from env 0
+        # accurately reflects every other env's cw value (1 vs 2).
+        if clock_wise_override is None and clock_same:
+            self._episode_pos_dof_dir = bool(np.random.rand() > 0.5)
+        else:
+            self._episode_pos_dof_dir = None
         self.open_door_stage = torch.zeros((self.num_envs), device=self.device)
 
         for env_id, reset in enumerate(to_reset):
