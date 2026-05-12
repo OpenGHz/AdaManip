@@ -81,6 +81,8 @@ class OpenPen(BaseEnv):
         self.dof_lower_limits_tensor = torch.zeros((self.asset_num, 2), device=self.device)
         self.dof_upper_limits_tensor = torch.zeros((self.asset_num, 2), device=self.device)
         self.mechanism_flag = torch.zeros((self.env_num,),device = self.device)
+        # Pre-initialize for the direction-aware latch in post_physics_step.
+        self.open_bottle_stage = torch.zeros((self.env_num,), device=self.device)
         self.clock_wise = torch.zeros((self.env_num,), device=self.device)
         self.goal_pos_offset_tensor = torch.zeros((self.asset_num, 3), device=self.device)
 
@@ -219,7 +221,14 @@ class OpenPen(BaseEnv):
         self.success_rate = torch.zeros((self.env_num,), device=self.device)
         self.success_buf = torch.zeros((self.env_num,), device=self.device).long()
 
-        self.try_range = 0.99875 # min random_range * open_stage_scale --> 2.35*0.5*0.85
+        # ``open_stage_scale`` parametrizes both the success threshold for the
+        # rotation dof (``try_range``) and the trigger threshold for
+        # ``open_bottle_stage`` below. Normal mode uses 0.85 (multiple
+        # rotations needed); ``one_go`` mode uses a small value so a single
+        # rotation step suffices.
+        self.open_stage_scale = 0.05 if cfg["task"].get("one_go", False) else 0.85
+        # min random_range * range_scale * open_stage_scale --> 2.35 * 0.5 * scale
+        self.try_range = 2.35 * 0.5 * self.open_stage_scale
         # flags for switching between training and evaluation mode
         self.train_mode = True
 
@@ -701,8 +710,21 @@ class OpenPen(BaseEnv):
         self._refresh_observation()
         # if self.progress_buf[0] > 500:
         #     self.cal_success()
-        self.open_bottle_stage = ((torch.abs(self.two_dof_tensor[:, 0]) >= 0.85 * 
-                                   (self.obj_actor_dof_upper_limits_tensor[:, 1] - self.obj_actor_dof_lower_limits_tensor[:, 1])))
+        # Direction-aware unlock: only progress in the cw-correct direction
+        # counts. ``torch.sign(upper + lower)`` is +1 when correct direction
+        # is positive (upper>0, lower=0) and -1 when correct direction is
+        # negative (upper=0, lower<0) — exactly one of upper/lower is 0 per
+        # ``init_obj_dof_state``. Wrong-direction rotation pushes dof in the
+        # opposite sign and ``signed_progress`` stays negative, so the latch
+        # below never fires from a wrong-direction stroke. ``| (... == 1)``
+        # keeps the unlock latched once triggered correctly.
+        _dof_upper = self.obj_actor_dof_upper_limits_tensor[:, 1]
+        _dof_lower = self.obj_actor_dof_lower_limits_tensor[:, 1]
+        _signed_progress = self.two_dof_tensor[:, 0] * torch.sign(_dof_upper + _dof_lower)
+        self.open_bottle_stage = (
+            (_signed_progress >= self.open_stage_scale * (_dof_upper - _dof_lower))
+            | (self.open_bottle_stage == 1)
+        )
         self.refresh_mechanism()
         done = self.reset_buf.clone()
         success = self.success.clone()

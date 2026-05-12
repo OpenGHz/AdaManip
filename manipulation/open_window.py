@@ -15,6 +15,9 @@ class OpenWindowManipulation(BaseManipulation) :
     # via ``ground_truth_chain_for_collect`` and ``concrete_attempt_chain_for_collect``.
     _CHAIN_CW: List[str] = ["Nx顺时针旋转把手", "拉开窗户"]
     _CHAIN_CCW: List[str] = ["Nx逆时针旋转把手", "拉开窗户"]
+    # one_go variants: single rotation step is enough, so chains drop Nx.
+    _CHAIN_CW_ONE_GO: List[str] = ["顺时针旋转把手", "拉开窗户"]
+    _CHAIN_CCW_ONE_GO: List[str] = ["逆时针旋转把手", "拉开窗户"]
 
     def __init__(self, env : BaseEnv, cfg : dict, logger : Logger) :
 
@@ -24,8 +27,12 @@ class OpenWindowManipulation(BaseManipulation) :
     # Hooks consumed by BaseManipulation.diffusion_evaluate
     # ------------------------------------------------------------------
 
+    @property
+    def _one_go(self) -> bool:
+        return bool(self.cfg.get("task", {}).get("one_go", False))
+
     def language_template_task_name(self) -> str:
-        return "window"
+        return "window_one_go" if self._one_go else "window"
 
     def dataset_dir_suffix(self) -> str:
         return "clock" + str(self.cfg["env"]["clockwise"])
@@ -54,7 +61,10 @@ class OpenWindowManipulation(BaseManipulation) :
         cw = state.get("clock_wise") if state else None
         if cw is None:
             return None
-        return list(self._CHAIN_CW if int(round(float(cw))) == 1 else self._CHAIN_CCW)
+        is_cw = int(round(float(cw))) == 1
+        if self._one_go:
+            return list(self._CHAIN_CW_ONE_GO if is_cw else self._CHAIN_CCW_ONE_GO)
+        return list(self._CHAIN_CW if is_cw else self._CHAIN_CCW)
 
     def ground_truth_chain_for_collect(
         self, env_id: int, state: Dict[str, Any]
@@ -65,6 +75,18 @@ class OpenWindowManipulation(BaseManipulation) :
         if cw is None:
             return None
         rotate_op = "顺时针旋转把手" if int(round(float(cw))) == 1 else "逆时针旋转把手"
+        if self._one_go:
+            n_min_list = getattr(self, "_window_intrinsic_n", None)
+            if (
+                n_min_list is not None
+                and env_id < len(n_min_list)
+                and n_min_list[env_id] is not None
+            ):
+                # window's bank has no zero-rotation chain — even when
+                # ``intrinsic_n == 0`` we still emit the direction-keyed
+                # rotate→pull chain so trajectory mc_id resolves cleanly.
+                return [rotate_op, "拉开窗户"]
+            return self.canonical_minimal_chain_for_state(state)
         return self.ground_truth_chain_from_intrinsic_n(
             env_id=env_id,
             state=state,
@@ -260,7 +282,15 @@ class OpenWindowManipulation(BaseManipulation) :
             self.env.actions = init_actions
             ####################start collect manipulation data###################
             max_step = 25 if policy == "adaptive" else 20
-            rotate_size = 0.04
+            one_go = self._one_go
+            # Default rotate_size; one_go uses a bigger step ONLY in the
+            # cw-correct direction (where the dof actually has range).
+            # Wrong direction stays at default — a wrong-direction stroke
+            # would just push against the dof's hard limit, so a big step
+            # would disturb the gripper's grasp without producing useful
+            # rotation.
+            rotate_size_default = 0.04
+            rotate_size_big = 0.08
             open_size = 0.03
             hand_pose = self.env.hand_rigid_body_tensor[:,:7]
             down_q = torch.stack(self.env.num_envs * [torch.tensor([0.0, 1.0, 0, 0])]).to(self.env.device).view((self.env.num_envs, 4))
@@ -294,7 +324,8 @@ class OpenWindowManipulation(BaseManipulation) :
                 if op is None or count <= 0:
                     return
                 if op in ("顺时针旋转把手", "逆时针旋转把手"):
-                    self._window_attempt_chains[env_id].append(f"{count}x{op}")
+                    stage = op if one_go else f"{count}x{op}"
+                    self._window_attempt_chains[env_id].append(stage)
                 else:
                     self._window_attempt_chains[env_id].append(op)
                 self._window_stage_statuses[env_id].append(bool(success))
@@ -314,12 +345,19 @@ class OpenWindowManipulation(BaseManipulation) :
                     else:
                         raise NotImplementedError
                     res_per_env.append(res)
+                    # In one_go: big rotate_size only in the cw-correct
+                    # direction ('r' if cw==1; 'y' if cw==0). Wrong direction
+                    # gets the default step so it doesn't fight against the
+                    # blocked dof limit.
+                    cw_i = int(self.env.clock_wise[i].item()) if one_go else None
                     if res == "x":
                         pre_p[i,:] += open_size * open_dir[i].squeeze(0)
                     elif res == "r":
-                        pre_p[i,:] += rotate_size * r_rotate_dir[i].squeeze(0)
+                        size = rotate_size_big if (one_go and cw_i == 1) else rotate_size_default
+                        pre_p[i,:] += size * r_rotate_dir[i].squeeze(0)
                     elif res == "y":
-                        pre_p[i,:] += rotate_size * y_rotate_dir[i].squeeze(0)
+                        size = rotate_size_big if (one_go and cw_i == 0) else rotate_size_default
+                        pre_p[i,:] += size * y_rotate_dir[i].squeeze(0)
 
                 pred_q = quat_mul(handle_q, down_q)
                 pred_pose = torch.cat([pre_p, pred_q], dim=-1).float()
@@ -398,42 +436,46 @@ class OpenWindowManipulation(BaseManipulation) :
                 return "y"
     
     def ada_policy(self, env_id, t, dof):
+        """Policy faithful to ``docs/design/tasks.md`` §5:
+            - t=0: random direction.
+            - After a failed open trial / wrong-direction rotation: switch
+              direction (doc: "if one direction fails, switch to the other").
+            - If prev was rotation: randomly sample {Rotate, Open}.
+        Uses ``clock_wise`` only to detect "wrong direction" (cheaty
+        collection-time oracle), not to bypass the switch-on-failure logic.
+        This matters in one_go mode where ``try_range`` is tiny and the old
+        ``abs(dof) < try_range`` correction branch was bypassed after one
+        rotation, causing wrong-t=0 envs to never recover.
+        """
         clock_wise = self.env.clock_wise[env_id]
         open_flag = self.env.open_bottle_stage[env_id]
+        correct_action = 'r' if clock_wise else 'y'
+
         if t == 0:
             action = 'r' if np.random.rand() > 11/20 else 'y'
             self.env.action_chosen[env_id, t] = action
             return action
-        elif abs(dof) < self.env.try_range:
-            
-            if clock_wise:
-                self.env.action_chosen[env_id, t] = 'r'
-                return 'r'
-            else:
-                self.env.action_chosen[env_id, t] = 'y'
-                return 'y'
+
+        prev = self.env.action_chosen[env_id, t-1]
+
+        # "if direction fails, switch" — if last rotation was in the wrong
+        # direction (didn't advance dof toward correct unlock), flip it.
+        if prev in ('r', 'y') and prev != correct_action and not open_flag:
+            action = correct_action
+            self.env.action_chosen[env_id, t] = action
+            return action
+
+        # Mechanism not yet unlocked — keep rotating in correct direction.
+        if not open_flag:
+            action = correct_action
+            self.env.action_chosen[env_id, t] = action
+            return action
+
+        # Mechanism unlocked → try pull. After a rotation, randomly sample
+        # {Rotate, Open}; once pulling, keep pulling.
+        if prev == 'x':
+            action = 'x'
         else:
-            if self.env.action_chosen[env_id, t-1] == 'x':
-                if open_flag:
-                    self.env.action_chosen[env_id, t] = 'x'
-                    return 'x'
-                else:
-                    if clock_wise:
-                        self.env.action_chosen[env_id, t] = 'r'
-                        return 'r'
-                    else:
-                        self.env.action_chosen[env_id, t] = 'y'
-                        return 'y'
-            else:
-                prob = np.random.rand()
-                if prob < 11/20:
-                    action = 'x'
-                    self.env.action_chosen[env_id, t] = action
-                    return action
-                else:
-                    if clock_wise:
-                        self.env.action_chosen[env_id, t] = 'r'
-                        return 'r'
-                    else:
-                        self.env.action_chosen[env_id, t] = 'y'
-                        return 'y'
+            action = 'x' if np.random.rand() < 11/20 else correct_action
+        self.env.action_chosen[env_id, t] = action
+        return action

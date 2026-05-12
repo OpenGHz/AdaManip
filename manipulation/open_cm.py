@@ -12,6 +12,8 @@ class OpenCoffeeMachineManipulation(BaseManipulation) :
 
     _CHAIN_DIRECT: List[str] = ["拉动手柄"]
     _CHAIN_ROTATE_PULL: List[str] = ["Nx旋转手柄", "拉动手柄"]
+    # one_go variant: single rotation step is enough, so the chain drops Nx.
+    _CHAIN_ROTATE_PULL_ONE_GO: List[str] = ["旋转手柄", "拉动手柄"]
 
     def __init__(self, env : BaseEnv, cfg : dict, logger : Logger) :
 
@@ -21,8 +23,12 @@ class OpenCoffeeMachineManipulation(BaseManipulation) :
     # Hooks consumed by BaseManipulation.diffusion_evaluate
     # ------------------------------------------------------------------
 
+    @property
+    def _one_go(self) -> bool:
+        return bool(self.cfg.get("task", {}).get("one_go", False))
+
     def language_template_task_name(self) -> str:
-        return "coffee_maker"
+        return "coffee_maker_one_go" if self._one_go else "coffee_maker"
 
     def dataset_dir_suffix(self) -> str:
         return "clock" + str(self.cfg["env"]["clockwise"])
@@ -55,14 +61,25 @@ class OpenCoffeeMachineManipulation(BaseManipulation) :
         cw = state.get("clock_wise") if state else None
         if cw is None:
             return None
-        return list(
-            self._CHAIN_ROTATE_PULL if int(round(float(cw))) == 1 else self._CHAIN_DIRECT
-        )
+        if int(round(float(cw))) != 1:
+            return list(self._CHAIN_DIRECT)
+        return list(self._CHAIN_ROTATE_PULL_ONE_GO if self._one_go else self._CHAIN_ROTATE_PULL)
 
     def ground_truth_chain_for_collect(
         self, env_id: int, state: Dict[str, Any]
     ) -> Optional[List[str]]:
         # See open_pen.py for full rationale.
+        if self._one_go:
+            n_min_list = getattr(self, "_cm_intrinsic_n", None)
+            if (
+                n_min_list is not None
+                and env_id < len(n_min_list)
+                and n_min_list[env_id] is not None
+            ):
+                if int(n_min_list[env_id]) == 0:
+                    return ["拉动手柄"]
+                return ["旋转手柄", "拉动手柄"]
+            return self.canonical_minimal_chain_for_state(state)
         return self.ground_truth_chain_from_intrinsic_n(
             env_id=env_id,
             state=state,
@@ -203,13 +220,16 @@ class OpenCoffeeMachineManipulation(BaseManipulation) :
             current_op = [None] * self.env.num_envs
             current_count = [0] * self.env.num_envs
 
+            one_go = self._one_go
+
             def _flush(env_id, success):
                 op = current_op[env_id]
                 cnt = current_count[env_id]
                 if op is None or cnt == 0:
                     return
                 if op == "旋转手柄":
-                    self._cm_attempt_chains[env_id].append(f"{cnt}x旋转手柄")
+                    stage = "旋转手柄" if one_go else f"{cnt}x旋转手柄"
+                    self._cm_attempt_chains[env_id].append(stage)
                     self._cm_stage_statuses[env_id].append(True)
                 else:
                     self._cm_attempt_chains[env_id].append("拉动手柄")
@@ -242,6 +262,11 @@ class OpenCoffeeMachineManipulation(BaseManipulation) :
                 ):
                     self._cm_intrinsic_n[env_id] = 0
             ####################start collect manipulation data############
+            # one_go: keep step_size at default — cm's geometry doesn't tolerate
+            # large per-step rotation (grasp slips). The "visual obviousness"
+            # for cm one_go comes from needing fewer steps overall (lower
+            # ``open_stage_scale`` → mechanism unlocks after one or two
+            # rotations rather than many).
             step_size = 0.035
             open_size = 0.015
             hand_pose = self.env.hand_rigid_body_tensor[:,:7]

@@ -12,6 +12,17 @@
         "Nx旋转瓶盖 -> 向上提起瓶盖"
       ]
     },
+    "bottle_one_go": {
+      "command": "打开瓶子",
+      "operation_set": [
+        "旋转瓶盖",
+        "向上提起瓶盖"
+      ],
+      "minimal_chains": [
+        "向上提起瓶盖",
+        "旋转瓶盖 -> 向上提起瓶盖"
+      ]
+    },
     "pen": {
       "command": "打开笔",
       "operation_set": [
@@ -21,6 +32,17 @@
       "minimal_chains": [
         "向上提起笔盖",
         "Nx旋转笔盖 -> 向上提起笔盖"
+      ]
+    },
+    "pen_one_go": {
+      "command": "打开笔",
+      "operation_set": [
+        "旋转笔盖",
+        "向上提起笔盖"
+      ],
+      "minimal_chains": [
+        "向上提起笔盖",
+        "旋转笔盖 -> 向上提起笔盖"
       ]
     },
     "pressure_cooker": {
@@ -34,6 +56,17 @@
         "Nx旋转把手 -> 向上提起把手"
       ]
     },
+    "pressure_cooker_one_go": {
+      "command": "打开高压锅",
+      "operation_set": [
+        "旋转把手",
+        "向上提起把手"
+      ],
+      "minimal_chains": [
+        "向上提起把手",
+        "旋转把手 -> 向上提起把手"
+      ]
+    },
     "coffee_maker": {
       "command": "拆卸咖啡机手柄",
       "operation_set": [
@@ -43,6 +76,17 @@
       "minimal_chains": [
         "拉动手柄",
         "Nx旋转手柄 -> 拉动手柄"
+      ]
+    },
+    "coffee_maker_one_go": {
+      "command": "拆卸咖啡机手柄",
+      "operation_set": [
+        "旋转手柄",
+        "拉动手柄"
+      ],
+      "minimal_chains": [
+        "拉动手柄",
+        "旋转手柄 -> 拉动手柄"
       ]
     },
     "window": {
@@ -55,7 +99,21 @@
       "minimal_chains": [
         "Nx顺时针旋转把手 -> 拉开窗户",
         "Nx逆时针旋转把手 -> 拉开窗户"
-      ]
+      ],
+      "success_check_additional_prompt": "窗户只要拉开45度左右就算成功了，不需要完全打开。"
+    },
+    "window_one_go": {
+      "command": "打开窗户",
+      "operation_set": [
+        "顺时针旋转把手",
+        "逆时针旋转把手",
+        "拉开窗户"
+      ],
+      "minimal_chains": [
+        "顺时针旋转把手 -> 拉开窗户",
+        "逆时针旋转把手 -> 拉开窗户"
+      ],
+      "success_check_additional_prompt": "窗户只要拉开45度左右就算成功了，不需要完全打开。"
     },
     "door": {
       "command": "打开门",
@@ -67,7 +125,21 @@
       "minimal_chains": [
         "Nx顺时针旋转把手 -> 拉开门",
         "Nx逆时针旋转把手 -> 拉开门"
-      ]
+      ],
+      "success_check_additional_prompt": "门只要拉开45度左右就算成功了，不需要完全打开。"
+    },
+    "door_one_go": {
+      "command": "打开门",
+      "operation_set": [
+        "顺时针旋转把手",
+        "逆时针旋转把手",
+        "拉开门"
+      ],
+      "minimal_chains": [
+        "顺时针旋转把手 -> 拉开门",
+        "逆时针旋转把手 -> 拉开门"
+      ],
+      "success_check_additional_prompt": "门只要拉开45度左右就算成功了，不需要完全打开。"
     },
     "lamp": {
       "command": "打开或调节台灯",
@@ -93,7 +165,8 @@
         "拉门",
         "顺时针旋转旋钮 -> 拉门",
         "逆时针旋转旋钮 -> 拉门"
-      ]
+      ],
+      "success_check_additional_prompt": "门只要拉开45度左右就算成功了，不需要完全打开。"
     },
     "microwave": {
       "command": "打开微波炉",
@@ -106,7 +179,7 @@
         "按按钮 -> 拉门"
       ],
       "additional_prompt": "请先在内部检查：1) 末端执行器最先接触的位置；2) 是否明确接触按钮或控制面板；3) 是否接触门边或把手并造成门角度变化；4) 轨迹中的位置、旋转和夹爪变化是否支持这些接触阶段。\n\n如何利用 trajectory 的 stats.phases 区分按按钮与拉门（视频不清时以轨迹为准）：\n- stats.phases 已按 gripper 开/合事件把整条轨迹切成连续段，每段给出 t_range、gripper、target_pos 与 target_euler_xyz_deg 的 start/end/median/min/max。只比较 gripper=1 的接触段。\n- 接触段之间是否对应同一种动作的判据是相对差异，而非绝对数值：\n  · 姿态差：把两个接触段的 target_euler_xyz_deg_median 逐轴相减，任一轴出现数十度量级（≳30°）的差异，说明末端执行器换了不同姿态；\n  · 位置差：把两个接触段的 target_pos_median 逐分量相减，任一方向出现数厘米量级（≳3–5 cm）的偏移，说明接触点不同；\n  · 任一项显著差异都表示这两段对应不同的动作类型/不同的接触对象。\n- 接触段的动作类型从段内运动学推断（不依赖具体坐标系约定）：\n  · 拉门式：gripper 闭合期间 target_pos 出现明显持续位移（段内某分量 max-min 显著较大），常伴随 target_euler 在某一轴上单调累积变化（数十度的旋转），且最终造成门角度变化；\n  · 按按钮式：gripper 闭合期间 target_pos 仅有一次较小的局部位移随即松开，段内姿态基本恒定，接触点与拉门段不同。\n- 决策规则（适用于任意微波炉摆放和任意可能的轨迹形态）：\n  · 若所有接触段彼此姿态相近、位置相近，且只出现一次拉门式位移/旋转 → 仅拉门，前面同姿态同位置但未造成门打开的早期抓握可忽略；\n  · 若至少存在一个接触段相对其它段在姿态或位置上有显著差异、且其内部为按按钮式动作 → 按按钮已经发生，必须把按按钮纳入答案。它无论位于拉门段之前还是夹在两次拉门段之间，都是‘导致成功打开的最小必要步骤’；夹在两次拉门之间的按按钮是解锁动作，不是‘试探性接触’。\n\n请基于上述 phases 证据严格按视频和轨迹共同支持的实际过程选择最小必要步骤序列，不要按微波炉常识补充未观察到的步骤。",
-      "success_check_additional_prompt": "微波炉门只要拉开45度左右就算成功了，不需要完全打开。"
+      "success_check_additional_prompt": "门只要拉开45度左右就算成功了，不需要完全打开。"
     }
   }
 }

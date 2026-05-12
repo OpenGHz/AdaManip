@@ -221,7 +221,12 @@ class OpenDoor(BaseEnv):
         self.success_rate = torch.zeros((self.env_num,), device=self.device)
         self.success_buf = torch.zeros((self.env_num,), device=self.device).long()
 
-        self.try_range = 0.44625 # min random_range * open_stage_scale --> 1.57*0.5*0.85
+        # one_go mode lowers ``open_stage_scale`` so a single rotation step
+        # crosses the threshold (no Nx). Normal mode keeps 0.85.
+        self.open_stage_scale = 0.05 if cfg["task"].get("one_go", False) else 0.85
+        # min_random * range_scale * open_stage_scale --> 0.525 * scale
+        # (preserves the historical 0.44625 at scale=0.85).
+        self.try_range = 0.525 * self.open_stage_scale
         # flags for switching between training and evaluation mode
         self.train_mode = True
         # self.writer = SummaryWriter(log_dir=self.log_dir, flush_secs=10)
@@ -682,8 +687,14 @@ class OpenDoor(BaseEnv):
 
         self.progress_buf += 1
         self._refresh_observation()
-        self.open_bottle_stage = ((torch.abs(self.two_dof_tensor[:, 0]) >= 0.85 * 
-                                   (self.obj_actor_dof_upper_limits_tensor[:, 1] - self.obj_actor_dof_lower_limits_tensor[:, 1]))) |(self.open_bottle_stage == 1)
+        # Direction-aware unlock — see open_pen.py for full rationale.
+        _dof_upper = self.obj_actor_dof_upper_limits_tensor[:, 1]
+        _dof_lower = self.obj_actor_dof_lower_limits_tensor[:, 1]
+        _signed_progress = self.two_dof_tensor[:, 0] * torch.sign(_dof_upper + _dof_lower)
+        self.open_bottle_stage = (
+            (_signed_progress >= self.open_stage_scale * (_dof_upper - _dof_lower))
+            | (self.open_bottle_stage == 1)
+        )
         # print(self.open_bottle_stage)
         self.refresh_mechanism()
         done = self.reset_buf.clone()

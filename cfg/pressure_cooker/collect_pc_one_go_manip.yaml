@@ -1,0 +1,118 @@
+task:
+  task_name: "open_pressurecooker_one_go"
+  num_episode: 1
+  num_eval_episode: 10
+  policy: "adaptive"
+  grasp: False
+  # one_go variant: env.open_stage_scale is lowered so a single rotation step
+  # crosses the threshold, and chain labels drop the Nx prefix.
+  one_go: True
+
+env:
+  env_name: "open pressure_cooker"
+  numEnvs: 6
+  numObservations: 26
+  numActions: 9
+  envSpacing: 2.0
+  horizon: 30
+  clockwise: 0.0
+  actionSpeedScale: 20
+  enableDebugVis: False
+
+  enableCameraSensors: True
+  enableForceSensors: False
+
+  collectData: True
+
+  collectPC: True
+  collectRGBVideo: True
+  collectForce: False
+  visualizePointcloud: False
+  PointDownSampleNum: 4096
+  rgbVideo:
+    cameraType: fixed
+    cameraIds: [1]
+    fps: 10
+    codec: libx264
+    crf: 18
+    preset: fast
+
+  reset:
+    bottle:
+      resetPositionNoise: 0.0
+      resetRotationNoise: 0.0
+      resetDofPosRandomInterval: 0.0
+      resetDofVelRandomInterval: 0.0
+    franka:
+      resetPositionNoise: 0.0
+      resetRotationNoise: 0.0
+      resetDofPosRandomInterval: 0.0
+      resetDofVelRandomInterval: 0.0
+
+  driveMode: "osc"
+  clipObservations: 5.0
+  clipActions: 1.0
+  cam:
+    width: 512
+    height: 512
+    cam_far_plane: 100
+    cam_near_plane: 0.01
+    cam_horizontal_fov: 85
+    cam_start:
+      - [0, -0.3, 0.9]
+      - [0, 0.3, 0.9]
+    cam_target:
+      - [0.1, 0, 0.2]
+      - [0.1, 0, 0.2]
+
+  asset:
+    assetRoot: "./assets"
+    datasetPath: "pressure_cooker"
+    AssetNum: 6
+    randomAsset: False
+    load_block: "train"
+    limit_random: 0.5
+    Assets:
+      'train':
+        'pc_1':
+          bounding_box: pc_1/bounding_box.json
+          name: 'pc_1'
+          path: pc_1/mobility.urdf
+        'pc_2':
+          bounding_box: pc_2/bounding_box.json
+          name: 'pc_2'
+          path: pc_2/mobility.urdf
+        'pc_3':
+          bounding_box: pc_3/bounding_box.json
+          name: 'pc_3'
+          path: pc_3/mobility.urdf
+        'pc_4':
+          bounding_box: pc_4/bounding_box.json
+          name: 'pc_4'
+          path: pc_4/mobility.urdf
+        'pc_5':
+          bounding_box: pc_5/bounding_box.json
+          name: 'pc_5'
+          path: pc_5/mobility.urdf
+        'pc_6':
+          bounding_box: pc_6/bounding_box.json
+          name: 'pc_6'
+          path: pc_6/mobility.urdf
+
+sim:
+  substeps: 2
+  physx:
+    num_threads: 4
+    solver_type: 1  # 0: pgs, 1: tgs
+    num_position_iterations: 8
+    num_velocity_iterations: 0
+    contact_offset: 0.002
+    rest_offset: 0.0
+    bounce_threshold_velocity: 0.2
+    max_depenetration_velocity: 1000.0
+    default_buffer_size_multiplier: 5.0
+  flex:
+    num_outer_iterations: 5
+    num_inner_iterations: 20
+    warm_start: 0.8
+    relaxation: 0.75

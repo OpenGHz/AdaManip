@@ -12,6 +12,8 @@ class OpenPenManipulation(BaseManipulation) :
 
     _CHAIN_DIRECT: List[str] = ["向上提起笔盖"]
     _CHAIN_ROTATE_LIFT: List[str] = ["Nx旋转笔盖", "向上提起笔盖"]
+    # one_go variant: single rotation step is enough, so the chain drops Nx.
+    _CHAIN_ROTATE_LIFT_ONE_GO: List[str] = ["旋转笔盖", "向上提起笔盖"]
 
     def __init__(self, env : BaseEnv, cfg : dict, logger : Logger) :
 
@@ -21,8 +23,12 @@ class OpenPenManipulation(BaseManipulation) :
     # Hooks consumed by BaseManipulation.diffusion_evaluate
     # ------------------------------------------------------------------
 
+    @property
+    def _one_go(self) -> bool:
+        return bool(self.cfg.get("task", {}).get("one_go", False))
+
     def language_template_task_name(self) -> str:
-        return "pen"
+        return "pen_one_go" if self._one_go else "pen"
 
     def dataset_dir_suffix(self) -> str:
         return "clock" + str(self.cfg["env"]["clockwise"])
@@ -55,9 +61,9 @@ class OpenPenManipulation(BaseManipulation) :
         cw = state.get("clock_wise") if state else None
         if cw is None:
             return None
-        return list(
-            self._CHAIN_ROTATE_LIFT if int(round(float(cw))) == 1 else self._CHAIN_DIRECT
-        )
+        if int(round(float(cw))) != 1:
+            return list(self._CHAIN_DIRECT)
+        return list(self._CHAIN_ROTATE_LIFT_ONE_GO if self._one_go else self._CHAIN_ROTATE_LIFT)
 
     def ground_truth_chain_for_collect(
         self, env_id: int, state: Dict[str, Any]
@@ -68,6 +74,21 @@ class OpenPenManipulation(BaseManipulation) :
         # first transitioned to True (env-physics fact, deterministic per
         # env state). All shared logic — lookup + warn-on-miss fallback —
         # lives in BaseManipulation.ground_truth_chain_from_intrinsic_n.
+        if self._one_go:
+            # one_go physics: a single rotation crosses the threshold, so
+            # the chain has no Nx prefix. Whether rotation is needed at all
+            # is still env-state-dependent (cw=0 envs may start with the
+            # cap already loose), so consult intrinsic_n.
+            n_min_list = getattr(self, "_pen_intrinsic_n", None)
+            if (
+                n_min_list is not None
+                and env_id < len(n_min_list)
+                and n_min_list[env_id] is not None
+            ):
+                if int(n_min_list[env_id]) == 0:
+                    return ["向上提起笔盖"]
+                return ["旋转笔盖", "向上提起笔盖"]
+            return self.canonical_minimal_chain_for_state(state)
         return self.ground_truth_chain_from_intrinsic_n(
             env_id=env_id,
             state=state,
@@ -262,13 +283,17 @@ class OpenPenManipulation(BaseManipulation) :
             current_op = [None] * self.env.num_envs
             current_count = [0] * self.env.num_envs
 
+            one_go = self._one_go
+
             def _flush(env_id, success):
                 op = current_op[env_id]
                 cnt = current_count[env_id]
                 if op is None or cnt == 0:
                     return
                 if op == "旋转笔盖":
-                    self._pen_attempt_chains[env_id].append(f"{cnt}x旋转笔盖")
+                    # one_go variant: chain is non-Nx, so emit the bare op.
+                    stage = "旋转笔盖" if one_go else f"{cnt}x旋转笔盖"
+                    self._pen_attempt_chains[env_id].append(stage)
                     self._pen_stage_statuses[env_id].append(True)
                 else:
                     self._pen_attempt_chains[env_id].append("向上提起笔盖")
@@ -313,8 +338,15 @@ class OpenPenManipulation(BaseManipulation) :
                     self._pen_intrinsic_n[env_id] = 0
             ##############start collect manipulation data############
             open_size = 0.015
-            rot_quat = torch.tensor([ 0, 0, -0.1305262, 0.9914449], device=self.env.device)
-            s_rot_quat = torch.tensor([ 0, 0, 0.1305262, 0.9914449], device=self.env.device)
+            if self._one_go:
+                # one_go: a single rotation step should be visually obvious.
+                # Use ~60° per step (sin(30°)=0.5, cos(30°)≈0.866) instead of
+                # the ~15° step used in the multi-rotation default.
+                rot_quat = torch.tensor([ 0, 0, -0.5, 0.8660254], device=self.env.device)
+                s_rot_quat = torch.tensor([ 0, 0, 0.5, 0.8660254], device=self.env.device)
+            else:
+                rot_quat = torch.tensor([ 0, 0, -0.1305262, 0.9914449], device=self.env.device)
+                s_rot_quat = torch.tensor([ 0, 0, 0.1305262, 0.9914449], device=self.env.device)
             rotate_dof = self.env.two_dof_tensor[:,0]
             prev_op_for_env = [None] * self.env.num_envs
             step_idx_for_env = [0] * self.env.num_envs

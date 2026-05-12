@@ -12,6 +12,8 @@ class OpenPressureCookerManipulation(BaseManipulation) :
 
     _CHAIN_DIRECT: List[str] = ["向上提起把手"]
     _CHAIN_ROTATE_LIFT: List[str] = ["Nx旋转把手", "向上提起把手"]
+    # one_go variant: single rotation step is enough, so the chain drops Nx.
+    _CHAIN_ROTATE_LIFT_ONE_GO: List[str] = ["旋转把手", "向上提起把手"]
 
     def __init__(self, env : BaseEnv, cfg : dict, logger : Logger) :
 
@@ -21,8 +23,12 @@ class OpenPressureCookerManipulation(BaseManipulation) :
     # Hooks consumed by BaseManipulation.diffusion_evaluate
     # ------------------------------------------------------------------
 
+    @property
+    def _one_go(self) -> bool:
+        return bool(self.cfg.get("task", {}).get("one_go", False))
+
     def language_template_task_name(self) -> str:
-        return "pressure_cooker"
+        return "pressure_cooker_one_go" if self._one_go else "pressure_cooker"
 
     def dataset_dir_suffix(self) -> str:
         return "clock" + str(self.cfg["env"]["clockwise"])
@@ -55,14 +61,25 @@ class OpenPressureCookerManipulation(BaseManipulation) :
         cw = state.get("clock_wise") if state else None
         if cw is None:
             return None
-        return list(
-            self._CHAIN_ROTATE_LIFT if int(round(float(cw))) == 1 else self._CHAIN_DIRECT
-        )
+        if int(round(float(cw))) != 1:
+            return list(self._CHAIN_DIRECT)
+        return list(self._CHAIN_ROTATE_LIFT_ONE_GO if self._one_go else self._CHAIN_ROTATE_LIFT)
 
     def ground_truth_chain_for_collect(
         self, env_id: int, state: Dict[str, Any]
     ) -> Optional[List[str]]:
         # See open_pen.py for full rationale.
+        if self._one_go:
+            n_min_list = getattr(self, "_pc_intrinsic_n", None)
+            if (
+                n_min_list is not None
+                and env_id < len(n_min_list)
+                and n_min_list[env_id] is not None
+            ):
+                if int(n_min_list[env_id]) == 0:
+                    return ["向上提起把手"]
+                return ["旋转把手", "向上提起把手"]
+            return self.canonical_minimal_chain_for_state(state)
         return self.ground_truth_chain_from_intrinsic_n(
             env_id=env_id,
             state=state,
@@ -235,13 +252,16 @@ class OpenPressureCookerManipulation(BaseManipulation) :
             current_op = [None] * self.env.num_envs
             current_count = [0] * self.env.num_envs
 
+            one_go = self._one_go
+
             def _flush(env_id, success):
                 op = current_op[env_id]
                 cnt = current_count[env_id]
                 if op is None or cnt == 0:
                     return
                 if op == "旋转把手":
-                    self._pc_attempt_chains[env_id].append(f"{cnt}x旋转把手")
+                    stage = "旋转把手" if one_go else f"{cnt}x旋转把手"
+                    self._pc_attempt_chains[env_id].append(stage)
                     self._pc_stage_statuses[env_id].append(True)
                 else:
                     self._pc_attempt_chains[env_id].append("向上提起把手")
@@ -276,7 +296,9 @@ class OpenPressureCookerManipulation(BaseManipulation) :
                     self._pc_intrinsic_n[env_id] = 0
             ####################start collect manipulation data###################
             max_step = 25 if policy == "adaptive" else 20
-            step_size = 0.035
+            # one_go: ~4x linear rotate offset per step so the single rotation
+            # is visually obvious.
+            step_size = 0.14 if one_go else 0.035
             open_size = 0.015
             hand_pose = self.env.hand_rigid_body_tensor[:,:7]
             handle_quat = self.env.part_rigid_body_tensor[:, 3:7]

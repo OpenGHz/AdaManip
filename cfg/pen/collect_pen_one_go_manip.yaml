@@ -1,0 +1,135 @@
+task:
+  task_name: "open_pen_one_go"
+  policy: "adaptive"
+  num_episode: 1
+  num_eval_episode: 10
+  seed: 0
+  grasp: False
+  # one_go variant: env.open_stage_scale is lowered so a single rotation step
+  # crosses the threshold, and chain labels drop the Nx prefix. See
+  # docs/design/tasks.md and manipulation/open_pen.py for details.
+  one_go: True
+
+env:
+  env_name: "open pen"
+  numEnvs: 10
+  numObservations: 26
+  numActions: 9
+  envSpacing: 2.0
+  horizon: 35
+  clockwise: 0.5
+  actionSpeedScale: 20
+  enableDebugVis: False
+
+  enableCameraSensors: True
+  enableForceSensors: False
+
+  collectData: True
+  collectPC: False
+  collectRGBVideo: True
+  collectForce: True
+  visualizePointcloud: False
+  PointDownSampleNum: 4096
+  rgbVideo:
+    cameraType: fixed
+    cameraIds: [1]
+    fps: 10
+    codec: libx264
+    crf: 18
+    preset: fast
+
+  reset:
+    bottle:
+      resetPositionNoise: 0.0
+      resetRotationNoise: 0.0
+      resetDofPosRandomInterval: 0.0
+      resetDofVelRandomInterval: 0.0
+    franka:
+      resetPositionNoise: 0.0
+      resetRotationNoise: 0.0
+      resetDofPosRandomInterval: 0.0
+      resetDofVelRandomInterval: 0.0
+
+  driveMode: "osc"
+  clipObservations: 5.0
+  clipActions: 1.0
+  cam:
+    width: 512
+    height: 512
+    cam_far_plane: 100
+    cam_near_plane: 0.01
+    cam_horizontal_fov: 85
+    cam_start:
+      - [0, -0.3, 0.55]
+      - [0, 0.3, 0.55]
+    cam_target:
+      - [0, 0, 0.2]
+      - [0, 0, 0.2]
+
+  asset:
+    assetRoot: "./assets"
+    datasetPath: "pen"
+    AssetNum: 10
+    randomAsset: False
+    load_block: "train"
+    limit_random: 0.5
+    Assets:
+      'train':
+        'pen_1':
+          bounding_box: pen_1/bounding_box.json
+          name: 'pen_1'
+          path: pen_1/mobility.urdf
+        'pen_2':
+          bounding_box: pen_2/bounding_box.json
+          name: 'pen_2'
+          path: pen_2/mobility.urdf
+        'pen_4':
+          bounding_box: pen_4/bounding_box.json
+          name: 'pen_4'
+          path: pen_4/mobility.urdf
+        'pen_5':
+          bounding_box: pen_5/bounding_box.json
+          name: 'pen_5'
+          path: pen_5/mobility.urdf
+        'pen_6':
+          bounding_box: pen_6/bounding_box.json
+          name: 'pen_6'
+          path: pen_6/mobility.urdf
+        'pen_7':
+          bounding_box: pen_7/bounding_box.json
+          name: 'pen_7'
+          path: pen_7/mobility.urdf
+        'pen_10':
+          bounding_box: pen_10/bounding_box.json
+          name: 'pen_10'
+          path: pen_10/mobility.urdf
+        'pen_13':
+          bounding_box: pen_13/bounding_box.json
+          name: 'pen_13'
+          path: pen_13/mobility.urdf
+        'pen_17':
+          bounding_box: pen_17/bounding_box.json
+          name: 'pen_17'
+          path: pen_17/mobility.urdf
+        'pen_18':
+          bounding_box: pen_18/bounding_box.json
+          name: 'pen_18'
+          path: pen_18/mobility.urdf
+
+sim:
+  substeps: 2
+  physx:
+    num_threads: 4
+    solver_type: 1  # 0: pgs, 1: tgs
+    num_position_iterations: 8
+    num_velocity_iterations: 0
+    contact_offset: 0.002
+    rest_offset: 0.0
+    bounce_threshold_velocity: 0.2
+    max_depenetration_velocity: 1000.0
+    default_buffer_size_multiplier: 5.0
+  flex:
+    num_outer_iterations: 5
+    num_inner_iterations: 20
+    warm_start: 0.8
+    relaxation: 0.75

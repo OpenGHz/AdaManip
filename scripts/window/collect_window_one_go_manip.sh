@@ -1,0 +1,1 @@
+python run.py --task=OpenWindow --controller=GtController --manipulation=OpenWindowManipulation --sim_device=cuda:0 --seed=0 --pipeline=gpu --cfg_env=cfg/window/collect_window_one_go_manip.yaml --headless

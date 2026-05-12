@@ -83,6 +83,8 @@ class OpenBottle(BaseEnv):
         self.dof_lower_limits_tensor = torch.zeros((self.asset_num, 2), device=self.device)
         self.dof_upper_limits_tensor = torch.zeros((self.asset_num, 2), device=self.device)
         self.mechanism_flag = torch.zeros((self.env_num,),device = self.device)
+        # Pre-initialize for the direction-aware latch in post_physics_step.
+        self.open_bottle_stage = torch.zeros((self.env_num,), device=self.device)
         self.clock_wise = np.zeros((self.env_num,))
         self.goal_pos_offset_tensor = torch.zeros((self.asset_num, 3), device=self.device)
 
@@ -228,7 +230,11 @@ class OpenBottle(BaseEnv):
         self.success_rate = torch.zeros((self.env_num,), device=self.device)
         self.success_buf = torch.zeros((self.env_num,), device=self.device).long()
 
-        self.try_range = 0.99875 # min random_range * open_stage_scale --> 2.35*0.5*0.85
+        # one_go mode lowers ``open_stage_scale`` so a single rotation step
+        # crosses the threshold (no Nx). Normal mode keeps 0.85.
+        self.open_stage_scale = 0.05 if cfg["task"].get("one_go", False) else 0.85
+        # min random_range * range_scale * open_stage_scale --> 2.35 * 0.5 * scale
+        self.try_range = 2.35 * 0.5 * self.open_stage_scale
         # flags for switching between training and evaluation mode
         self.train_mode = True
         # self.writer = SummaryWriter(log_dir=self.log_dir, flush_secs=10)
@@ -708,8 +714,14 @@ class OpenBottle(BaseEnv):
         self._refresh_observation()
         # if self.progress_buf[0] > 500:
         #     self.cal_success()
-        self.open_bottle_stage = ((torch.abs(self.two_dof_tensor[:, 0]) >= 0.85 * 
-                                   (self.obj_actor_dof_upper_limits_tensor[:, 1] - self.obj_actor_dof_lower_limits_tensor[:, 1])))
+        # Direction-aware unlock — see open_pen.py for full rationale.
+        _dof_upper = self.obj_actor_dof_upper_limits_tensor[:, 1]
+        _dof_lower = self.obj_actor_dof_lower_limits_tensor[:, 1]
+        _signed_progress = self.two_dof_tensor[:, 0] * torch.sign(_dof_upper + _dof_lower)
+        self.open_bottle_stage = (
+            (_signed_progress >= self.open_stage_scale * (_dof_upper - _dof_lower))
+            | (self.open_bottle_stage == 1)
+        )
         
         self.refresh_mechanism()
         done = self.reset_buf.clone()

@@ -1,0 +1,124 @@
+task:
+  task_name: "open_bottle_one_go"
+  policy: "adaptive"
+  num_episode: 1
+  num_eval_episode: 10
+  seed: 0
+  grasp: False
+  # one_go variant: env.open_stage_scale is lowered so a single rotation step
+  # crosses the threshold, and chain labels drop the Nx prefix.
+  one_go: True
+
+env:
+  env_name: "open bottle"
+  numEnvs: 7
+  numObservations: 26
+  numActions: 9
+  envSpacing: 2.0
+  horizon: 50
+  clockwise: 0.5
+  actionSpeedScale: 20
+  enableDebugVis: False
+
+  enableCameraSensors: True
+  enableForceSensors: False
+
+  collectData: True
+  collect_all: True
+  collectPC: False
+  collectRGBVideo: True
+  collectForce: True
+  visualizePointcloud: False
+  PointDownSampleNum: 4096
+  rgbVideo:
+    cameraType: fixed
+    cameraIds: [1]
+    fps: 10
+    codec: libx264
+    crf: 18
+    preset: fast
+
+  reset:
+    bottle:
+      resetPositionNoise: 0.0
+      resetRotationNoise: 0.0
+      resetDofPosRandomInterval: 0.0
+      resetDofVelRandomInterval: 0.0
+    franka:
+      resetPositionNoise: 0.0
+      resetRotationNoise: 0.0
+      resetDofPosRandomInterval: 0.0
+      resetDofVelRandomInterval: 0.0
+
+  driveMode: "osc"
+  clipObservations: 5.0
+  clipActions: 1.0
+  cam:
+    width: 512
+    height: 512
+    cam_far_plane: 2
+    cam_near_plane: 0.01
+    cam_horizontal_fov: 85
+    cam_start:
+      - [0, -0.3, 0.57]
+      - [0, 0.3, 0.57]
+    cam_target:
+      - [0, 0, 0.2]
+      - [0, 0, 0.2]
+
+  asset:
+    assetRoot: "./assets"
+    datasetPath: "bottle"
+    AssetNum: 7
+    randomAsset: False
+    load_block: "train"
+    limit_random: 0.5
+    Assets:
+      'train':
+        'b1':
+          bounding_box: b1/bounding_box.json
+          name: 'b1'
+          path: b1/mobility.urdf
+        'b2':
+          bounding_box: b2/bounding_box.json
+          name: 'b2'
+          path: b2/mobility.urdf
+        'b6':
+          bounding_box: b6/bounding_box.json
+          name: 'b6'
+          path: b6/mobility.urdf
+        'b12':
+          bounding_box: b12/bounding_box.json
+          name: 'b12'
+          path: b12/mobility.urdf
+        'b10':
+          bounding_box: b10/bounding_box.json
+          name: 'b10'
+          path: b10/mobility.urdf
+        'b15':
+          bounding_box: b15/bounding_box.json
+          name: 'b15'
+          path: b15/mobility.urdf
+        'b7':
+          bounding_box: b7/bounding_box.json
+          name: 'b7'
+          path: b7/mobility.urdf
+
+
+sim:
+  substeps: 2
+  physx:
+    num_threads: 4
+    solver_type: 1  # 0: pgs, 1: tgs
+    num_position_iterations: 8
+    num_velocity_iterations: 0
+    contact_offset: 0.002
+    rest_offset: 0.0
+    bounce_threshold_velocity: 0.2
+    max_depenetration_velocity: 1000.0
+    default_buffer_size_multiplier: 5.0
+  flex:
+    num_outer_iterations: 5
+    num_inner_iterations: 20
+    warm_start: 0.8
+    relaxation: 0.75

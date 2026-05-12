@@ -15,6 +15,8 @@ class OpenBottleManipulation(BaseManipulation) :
     # clock_wise=1 (cap upper=0 — locked, rotate first) → chain 1
     _CHAIN_DIRECT: List[str] = ["向上提起瓶盖"]
     _CHAIN_ROTATE_LIFT: List[str] = ["Nx旋转瓶盖", "向上提起瓶盖"]
+    # one_go variant: single rotation step is enough, so the chain drops Nx.
+    _CHAIN_ROTATE_LIFT_ONE_GO: List[str] = ["旋转瓶盖", "向上提起瓶盖"]
 
     def __init__(self, env : BaseEnv, cfg : dict, logger : Logger) :
 
@@ -24,8 +26,12 @@ class OpenBottleManipulation(BaseManipulation) :
     # Hooks consumed by BaseManipulation.diffusion_evaluate
     # ------------------------------------------------------------------
 
+    @property
+    def _one_go(self) -> bool:
+        return bool(self.cfg.get("task", {}).get("one_go", False))
+
     def language_template_task_name(self) -> str:
-        return "bottle"
+        return "bottle_one_go" if self._one_go else "bottle"
 
     def dataset_dir_suffix(self) -> str:
         return "clock" + str(self.cfg["env"]["clockwise"])
@@ -58,14 +64,25 @@ class OpenBottleManipulation(BaseManipulation) :
         cw = state.get("clock_wise") if state else None
         if cw is None:
             return None
-        return list(
-            self._CHAIN_ROTATE_LIFT if int(round(float(cw))) == 1 else self._CHAIN_DIRECT
-        )
+        if int(round(float(cw))) != 1:
+            return list(self._CHAIN_DIRECT)
+        return list(self._CHAIN_ROTATE_LIFT_ONE_GO if self._one_go else self._CHAIN_ROTATE_LIFT)
 
     def ground_truth_chain_for_collect(
         self, env_id: int, state: Dict[str, Any]
     ) -> Optional[List[str]]:
         # See open_pen.py for full rationale.
+        if self._one_go:
+            n_min_list = getattr(self, "_bottle_intrinsic_n", None)
+            if (
+                n_min_list is not None
+                and env_id < len(n_min_list)
+                and n_min_list[env_id] is not None
+            ):
+                if int(n_min_list[env_id]) == 0:
+                    return ["向上提起瓶盖"]
+                return ["旋转瓶盖", "向上提起瓶盖"]
+            return self.canonical_minimal_chain_for_state(state)
         return self.ground_truth_chain_from_intrinsic_n(
             env_id=env_id,
             state=state,
@@ -249,13 +266,17 @@ class OpenBottleManipulation(BaseManipulation) :
             current_op = [None] * self.env.num_envs
             current_count = [0] * self.env.num_envs
 
+            one_go = self._one_go
+
             def _flush(env_id, success):
                 op = current_op[env_id]
                 cnt = current_count[env_id]
                 if op is None or cnt == 0:
                     return
                 if op == "旋转瓶盖":
-                    self._bottle_attempt_chains[env_id].append(f"{cnt}x旋转瓶盖")
+                    # one_go variant: chain is non-Nx, so emit the bare op.
+                    stage = "旋转瓶盖" if one_go else f"{cnt}x旋转瓶盖"
+                    self._bottle_attempt_chains[env_id].append(stage)
                     self._bottle_stage_statuses[env_id].append(True)
                 else:
                     self._bottle_attempt_chains[env_id].append("向上提起瓶盖")
@@ -297,8 +318,13 @@ class OpenBottleManipulation(BaseManipulation) :
                     self._bottle_intrinsic_n[env_id] = 0
             ####################start collect manipulation data############
             open_size = 0.015
-            rot_quat = torch.tensor([ 0, 0, -0.1305262, 0.9914449], device=self.env.device)
-            s_rot_quat = torch.tensor([ 0, 0, 0.1305262, 0.9914449], device=self.env.device)
+            if one_go:
+                # one_go: ~60° per step for a visually obvious single rotation.
+                rot_quat = torch.tensor([ 0, 0, -0.5, 0.8660254], device=self.env.device)
+                s_rot_quat = torch.tensor([ 0, 0, 0.5, 0.8660254], device=self.env.device)
+            else:
+                rot_quat = torch.tensor([ 0, 0, -0.1305262, 0.9914449], device=self.env.device)
+                s_rot_quat = torch.tensor([ 0, 0, 0.1305262, 0.9914449], device=self.env.device)
             rotate_dof = self.env.two_dof_tensor[:,0]
             prev_op_for_env = [None] * self.env.num_envs
             step_idx_for_env = [0] * self.env.num_envs

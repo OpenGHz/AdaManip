@@ -1,0 +1,1 @@
+python run.py --task=OpenCoffeeMachine --controller=GtController --manipulation=OpenCoffeeMachineManipulation --sim_device=cuda:0 --seed=0 --pipeline=gpu --cfg_env=cfg/cm/collect_cm_one_go_manip.yaml --headless

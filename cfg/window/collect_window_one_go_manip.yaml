@@ -1,0 +1,126 @@
+task:
+  task_name: "open_window_one_go"
+  policy: "adaptive"
+  num_episode: 1
+  num_eval_episode: 1
+  grasp: False
+  # one_go variant: env.open_stage_scale is lowered so a single rotation step
+  # crosses the threshold, and chain labels drop the Nx prefix.
+  one_go: True
+
+
+env:
+  env_name: "open window"
+  numEnvs: 8
+  numObservations: 26
+  numActions: 9
+  envSpacing: 2.0
+  horizon: 35
+  clockwise: 0.5
+  actionSpeedScale: 20
+  enableDebugVis: False
+
+  enableCameraSensors: True
+  enableForceSensors: False
+
+  collectData: True
+  collectPC: False
+  collectRGBVideo: True
+  collectForce: True
+  visualizePointcloud: False
+  PointDownSampleNum: 4096
+  rgbVideo:
+    cameraType: fixed
+    cameraIds: [1]
+    fps: 10
+    codec: libx264
+    crf: 18
+    preset: fast
+
+  reset:
+    bottle:
+      resetPositionNoise: 0.0
+      resetRotationNoise: 0.0
+      resetDofPosRandomInterval: 0.0
+      resetDofVelRandomInterval: 0.0
+    franka:
+      resetPositionNoise: 0.0
+      resetRotationNoise: 0.0
+      resetDofPosRandomInterval: 0.0
+      resetDofVelRandomInterval: 0.0
+
+  driveMode: "osc"
+  clipObservations: 5.0
+  clipActions: 1.0
+  cam:
+    width: 512
+    height: 512
+    cam_far_plane: 100
+    cam_near_plane: 0.01
+    cam_horizontal_fov: 85
+    cam_start:
+      - [0.65, -0.5, 0.9]
+      - [0.65, 0.5, 0.9]
+    cam_target:
+      - [0, 0, 0.8]
+      - [0, 0, 0.8]
+
+  asset:
+    assetRoot: "./assets"
+    datasetPath: "window"
+    AssetNum: 8
+    randomAsset: False
+    load_block: "train"
+    limit_random: 0.5
+    Assets:
+      'train':
+        'w1':
+          bounding_box: w1/bounding_box.json
+          name: 'w1'
+          path: w1/mobility.urdf
+        'w2':
+          bounding_box: w2/bounding_box.json
+          name: 'w2'
+          path: w2/mobility.urdf
+        'w3':
+          bounding_box: w3/bounding_box.json
+          name: 'w3'
+          path: w3/mobility.urdf
+        'w4':
+          bounding_box: w4/bounding_box.json
+          name: 'w4'
+          path: w4/mobility.urdf
+        'w5':
+          bounding_box: w5/bounding_box.json
+          name: 'w5'
+          path: w5/mobility.urdf
+        'w7':
+          bounding_box: w7/bounding_box.json
+          name: 'w7'
+          path: w7/mobility.urdf
+        'w8':
+          bounding_box: w8/bounding_box.json
+          name: 'w8'
+          path: w8/mobility.urdf
+        'w9':
+          bounding_box: w9/bounding_box.json
+          name: 'w9'
+          path: w9/mobility.urdf
+
+sim:
+  substeps: 2
+  physx:
+    num_threads: 4
+    solver_type: 1  # 0: pgs, 1: tgs
+    num_position_iterations: 8
+    num_velocity_iterations: 0
+    contact_offset: 0.002
+    rest_offset: 0.0
+    bounce_threshold_velocity: 0.2
+    max_depenetration_velocity: 1000.0
+    default_buffer_size_multiplier: 5.0
+  flex:
+    num_outer_iterations: 5
+    num_inner_iterations: 20
+    warm_start: 0.8
+    relaxation: 0.75
