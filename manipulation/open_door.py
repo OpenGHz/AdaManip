@@ -207,10 +207,8 @@ class OpenDoorManipulation(BaseManipulation) :
 
             # update env end flag (grasp policy: every env succeeds by construction)
             done_flag = [True] * self.env.num_envs
-            for env_id in range(self.env.num_envs):
-                demo_buffer.append(self.eps_buffer[env_id])
             print(f"Episode {eps} Succeeded")
-            self.collect_episode_end(ctx, eps, done_flag)
+            self.collect_episode_end(ctx, eps, done_flag, self.eps_buffer, demo_buffer)
 
         self.collect_finalize(ctx, demo_buffer)
 

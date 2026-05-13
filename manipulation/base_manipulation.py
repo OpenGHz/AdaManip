@@ -1340,29 +1340,26 @@ class BaseManipulation:
         ctx: Dict[str, Any],
         eps: int,
         done_flag: List[bool],
-        eps_buffer: Optional[List["Episode_Buffer"]] = None,
-        demo_buffer: Optional["Experience"] = None,
+        eps_buffer: List["Episode_Buffer"],
+        demo_buffer: "Experience",
     ) -> None:
-        """Finalize one episode: emit per-(env, episode) trajectory_record using
-        ``canonical_minimal_chain_for_state`` for each successful env, close the
-        video writer, and clear per-episode frame records.
+        """Finalize one episode: append each successful env's trajectory to
+        ``demo_buffer`` in env_id order, emit per-(env, episode)
+        trajectory_record using ``canonical_minimal_chain_for_state``,
+        close the video writer, and clear per-episode frame records.
 
-        When ``eps_buffer`` and ``demo_buffer`` are both passed, also append
-        each successful env's accumulated trajectory to ``demo_buffer`` in
-        env_id order (matching trajectory_records' env_id ordering). Subclasses
-        that pass both should NOT do their own per-success
-        ``demo_buffer.append`` — otherwise trajectories will be appended
-        twice. When either is omitted, the legacy "subclass owns the append"
-        flow is preserved.
+        ``eps_buffer`` (one ``Episode_Buffer`` per env) and ``demo_buffer``
+        (global ``Experience``) are required. Subclasses must NOT do their
+        own per-success ``demo_buffer.append`` — that would double-append.
+        Iterating env_id-sorted here is what keeps zarr index ↔
+        trajectory_records index in lock-step (and ↔ rgb_videos paths).
         """
         states = self.capture_per_env_episode_state()
         expanded_minimal_chains = ctx.get("expanded_minimal_chains") or []
-        append_demo = eps_buffer is not None and demo_buffer is not None
         for env_id, ok in enumerate(done_flag):
             if not ok:
                 continue
-            if append_demo:
-                demo_buffer.append(eps_buffer[env_id])
+            demo_buffer.append(eps_buffer[env_id])
             attempt = self.concrete_attempt_chain_for_collect(env_id, states[env_id])
             attempt_chain, stage_status = attempt if attempt else ([], [])
             attempt_chain = list(attempt_chain)

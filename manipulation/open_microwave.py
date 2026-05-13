@@ -421,7 +421,6 @@ class OpenMicroWaveManipulation(BaseManipulation):
 
                 for env_id in range(self.env.num_envs):
                     if self.task_success_for_env(env_id):
-                        demo_buffer.append(self.eps_buffer[env_id])
                         done_flag[env_id] = True
                         print(f"Env {env_id} Succeeded")
             finally:
@@ -430,7 +429,12 @@ class OpenMicroWaveManipulation(BaseManipulation):
                 # for attempt_chain/stage_status, and ``ground_truth_chain_for_collect``
                 # for the env-state-derived optimal). minimal_chain is
                 # extracted from attempt_chain inside collect_episode_end.
-                self.collect_episode_end(ctx, eps, done_flag)
+                # It also appends each successful env's eps_buffer to
+                # demo_buffer in env_id order (keeps zarr ↔ trajectory
+                # records ↔ rgb_videos aligned).
+                self.collect_episode_end(
+                    ctx, eps, done_flag, self.eps_buffer, demo_buffer,
+                )
         self.collect_finalize(ctx, demo_buffer)
 
     def action_choose(self, t, index, one_motion, two_motion):

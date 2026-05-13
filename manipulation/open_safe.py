@@ -421,10 +421,7 @@ class OpenSafeManipulation(BaseManipulation) :
                         for j in range(15):
                             self.env.step(pred_pose)  
                 
-                for env_id in range(self.env.num_envs):
-                    if (torch.abs(self.env.one_dof_tensor[env_id, 0]) > np.pi/6).cpu().item():
-                        all_demo_buffer.append(self.all_eps_buffer[env_id])
-                        print(f"Env {env_id} Succeeded")
+                # demo_buffer append handled by collect_episode_end below.
 
             else:
                 # ===== Adaptive policy (per tasks.md) =====
@@ -681,14 +678,20 @@ class OpenSafeManipulation(BaseManipulation) :
                         self.process_data(pred_pose)
                         for j in range(15):
                             self.env.step(pred_pose)
-                for env_id in range(self.env.num_envs):
-                    all_demo_buffer.append(self.all_eps_buffer[env_id])
-                    print(f"Env {env_id} Succeeded")
             done_flag = [
                 bool((torch.abs(self.env.one_dof_tensor[env_id, 0]) > np.pi / 6).cpu().item())
                 for env_id in range(self.env.num_envs)
             ]
-            self.collect_episode_end(ctx, eps, done_flag)
+            for env_id, ok in enumerate(done_flag):
+                if ok:
+                    print(f"Env {env_id} Succeeded")
+            # ``collect_episode_end`` does the env_id-sorted append of
+            # successful envs into ``all_demo_buffer`` (previously this
+            # branch unconditionally appended every env — including
+            # failed ones — which made zarr len > trajectory_records len).
+            self.collect_episode_end(
+                ctx, eps, done_flag, self.all_eps_buffer, all_demo_buffer,
+            )
 
         self.collect_finalize(ctx, all_demo_buffer)
 
