@@ -247,22 +247,23 @@ class OpenDoorManipulation(BaseManipulation) :
             print("eps_{}".format(eps+1))
             self.env.reset()
             self.collect_episode_start(ctx, eps)
+            # approach / pre-grasp / grasp-close intentionally do not call
+            # `_record_video_frame()` so the manip-side mp4 stays 1:1
+            # aligned with the manip zarr. The full preamble trajectory is
+            # available in the paired `*_grasp_*` dataset.
             pre_pose = self.env.adjust_hand_pose.clone()
             pre_pose[:, 0] += self.env.gripper_length*2
             pre_pose[:, 2] += 0.01
             for i in range(4):
                 for j in range(10):
                     self.env.step(pre_pose)
-                self._record_video_frame()
             pre_pose[:, 0] -= self.env.gripper_length + 0.008
             for i in range(3):
                 for j in range(10):
                     self.env.step(pre_pose)
-                self._record_video_frame()
             self.env.gripper = True
             for i in range(10):
                 self.env.step(hand_pose)
-            self._record_video_frame()
             init_actions = self.action_process(hand_pose)
             self.env.actions = init_actions
             ################start collect manip data#####################
@@ -401,10 +402,10 @@ class OpenDoorManipulation(BaseManipulation) :
                             )
                             current_op[env_id] = None
                             current_count[env_id] = 0
-                        demo_buffer.append(eps_buffer[env_id])
                         done_flag[env_id] = True
+                        self._mark_env_video_done(env_id)
                         print(f"Env {env_id} Succeeded")
-            self.collect_episode_end(ctx, eps, done_flag)
+            self.collect_episode_end(ctx, eps, done_flag, eps_buffer, demo_buffer)
 
         self.collect_finalize(ctx, demo_buffer)
     

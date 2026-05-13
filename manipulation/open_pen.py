@@ -301,26 +301,26 @@ class OpenPenManipulation(BaseManipulation) :
                 current_op[env_id] = None
                 current_count[env_id] = 0
 
+            # approach / pre-grasp / grasp-close intentionally do not call
+            # `_record_video_frame()` so the manip-side mp4 stays 1:1
+            # aligned with the manip zarr.
             pre_pose = self.env.adjust_hand_pose.clone()
             pre_pose[:, 2] += self.env.gripper_length*2
             for i in range(3):
                 for j in range(10):
                     self.env.step(pre_pose)
-                self._record_video_frame()
 
             # grasp the handle
             pre_pose[:, 2] -= self.env.gripper_length - 0.016
             for i in range(3):
                 for j in range(10):
                     self.env.step(pre_pose)
-                self._record_video_frame()
 
             hand_pose = self.env.hand_rigid_body_tensor[:,:7]
 
             self.env.gripper = True
             for i in range(10):
                 self.env.step(hand_pose)
-            self._record_video_frame()
 
             '''
             set the env previous action to the current hand pose
@@ -419,10 +419,10 @@ class OpenPenManipulation(BaseManipulation) :
                     if (torch.abs(self.env.one_dof_tensor[env_id, 0]) > 0.04).cpu().item() and not done_flag[env_id]:
                         # Final stage caused success — flush with status=True.
                         _flush(env_id, success=True)
-                        demo_buffer.append(eps_buffer[env_id])
                         done_flag[env_id] = True
+                        self._mark_env_video_done(env_id)
                         print(f"Env {env_id} Succeeded")
-            self.collect_episode_end(ctx, eps, done_flag)
+            self.collect_episode_end(ctx, eps, done_flag, eps_buffer, demo_buffer)
 
         self.collect_finalize(ctx, demo_buffer)
 

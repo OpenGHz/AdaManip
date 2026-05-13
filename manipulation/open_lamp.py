@@ -250,23 +250,25 @@ class OpenLampManipulation(BaseManipulation) :
             print("eps_{}".format(eps+1))
             self.env.reset()
             self.collect_episode_start(ctx, eps)
+            # Note: approach / pre-grasp / grasp-close intentionally do NOT
+            # call `_record_video_frame()` so the manip-side mp4 starts at
+            # the first manip loop step and stays 1:1 aligned with the
+            # manip zarr. The full preamble trajectory is available in the
+            # paired `*_grasp_*` dataset.
             pre_pose = self.env.adjust_hand_pose.clone()
             pre_pose[:, 2] += self.env.gripper_length*2
             for i in range(3):
                 for j in range(10):
                     self.env.step(pre_pose)
-                self._record_video_frame()
 
             pre_pose[:, 2] -= self.env.gripper_length + 0.01
             for i in range(3):
                 for j in range(10):
                     self.env.step(pre_pose)
-                self._record_video_frame()
 
             self.env.gripper = True
             for i in range(10):
                 self.env.step(hand_pose)
-            self._record_video_frame()
 
             init_actions = self.action_process(hand_pose)
             self.env.actions = init_actions
@@ -357,8 +359,8 @@ class OpenLampManipulation(BaseManipulation) :
                                 if current_op[env_id] is not None:
                                     _flush_stage(env_id, current_op[env_id], True)
                                     current_op[env_id] = None
-                                demo_buffer.append(eps_buffer[env_id])
                                 done_flag[env_id] = True
+                                self._mark_env_video_done(env_id)
                                 succ_cnt[env_id] += 1
                                 print(f"Env {env_id} Succeeded")
                         else:
@@ -366,12 +368,12 @@ class OpenLampManipulation(BaseManipulation) :
                                 if current_op[env_id] is not None:
                                     _flush_stage(env_id, current_op[env_id], True)
                                     current_op[env_id] = None
-                                demo_buffer.append(eps_buffer[env_id])
                                 done_flag[env_id] = True
+                                self._mark_env_video_done(env_id)
                                 succ_cnt[env_id] += 1
                                 print(f"Env {env_id} Succeeded")
             print(succ_cnt)
-            self.collect_episode_end(ctx, eps, done_flag)
+            self.collect_episode_end(ctx, eps, done_flag, eps_buffer, demo_buffer)
 
         self.collect_finalize(ctx, demo_buffer)
     

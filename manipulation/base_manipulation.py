@@ -138,7 +138,23 @@ class EpisodeVideoRecorder:
         for env_id, env_frames in enumerate(frames_by_env):
             for frame_idx, frame in enumerate(env_frames):
                 camera_id = self.camera_ids[frame_idx]
-                self.writers[(env_id, camera_id)].write(frame)
+                writer = self.writers.get((env_id, camera_id))
+                if writer is not None:
+                    writer.write(frame)
+
+    def mark_env_done(self, env_id: int) -> None:
+        """Stop writing frames for ``env_id`` and finalize its per-camera
+        mp4 writers. Used by split-task ``collect_manip_data`` so each
+        env's mp4 ends at the iter where its done_flag flips True
+        (otherwise the env sits idle while other envs continue, producing
+        trailing video frames with no corresponding zarr row).
+        """
+        if not (0 <= env_id < self.num_envs):
+            return
+        for camera_id in self.camera_ids:
+            writer = self.writers.pop((env_id, camera_id), None)
+            if writer is not None:
+                writer.close()
 
     def close_episode(self):
         for writer in self.writers.values():
@@ -768,6 +784,16 @@ class BaseManipulation:
         )
         self.video_recorder.write_frames(rgb_frames)
 
+    def _mark_env_video_done(self, env_id: int) -> None:
+        """Close the per-env mp4 writer so its frame count stops growing
+        once the env's done_flag flips True. Called from each split-task
+        ``collect_manip_data`` immediately after ``done_flag[env_id] = True``.
+        No-op when video recording is disabled.
+        """
+        if self.video_recorder is None:
+            return
+        self.video_recorder.mark_env_done(env_id)
+
     # =====================================================================
     # Eval-metrics persistence
     # =====================================================================
@@ -1299,10 +1325,14 @@ class BaseManipulation:
         }
 
     def collect_episode_start(self, ctx: Dict[str, Any], eps: int) -> None:
-        """Begin one episode: open video writer + reset frame label tracker."""
+        """Begin one episode: open video writer + reset frame label tracker.
+
+        The pre-action init frame (env.reset state) is intentionally NOT
+        recorded so the resulting mp4 stays 1:1 aligned with the zarr
+        rows that ``process_data`` (or its split-task equivalent) emits.
+        """
         if self.video_recorder is not None:
             self.video_recorder.start_episode(eps)
-            self._record_video_frame()
         self.init_episode_frame_records(self.env.num_envs)
 
     def collect_episode_end(
@@ -1310,19 +1340,29 @@ class BaseManipulation:
         ctx: Dict[str, Any],
         eps: int,
         done_flag: List[bool],
+        eps_buffer: Optional[List["Episode_Buffer"]] = None,
+        demo_buffer: Optional["Experience"] = None,
     ) -> None:
         """Finalize one episode: emit per-(env, episode) trajectory_record using
         ``canonical_minimal_chain_for_state`` for each successful env, close the
         video writer, and clear per-episode frame records.
 
-        Does NOT mutate ``demo_buffer`` — each subclass owns its append logic
-        (e.g., per-success append vs. end-of-episode append).
+        When ``eps_buffer`` and ``demo_buffer`` are both passed, also append
+        each successful env's accumulated trajectory to ``demo_buffer`` in
+        env_id order (matching trajectory_records' env_id ordering). Subclasses
+        that pass both should NOT do their own per-success
+        ``demo_buffer.append`` — otherwise trajectories will be appended
+        twice. When either is omitted, the legacy "subclass owns the append"
+        flow is preserved.
         """
         states = self.capture_per_env_episode_state()
         expanded_minimal_chains = ctx.get("expanded_minimal_chains") or []
+        append_demo = eps_buffer is not None and demo_buffer is not None
         for env_id, ok in enumerate(done_flag):
             if not ok:
                 continue
+            if append_demo:
+                demo_buffer.append(eps_buffer[env_id])
             attempt = self.concrete_attempt_chain_for_collect(env_id, states[env_id])
             attempt_chain, stage_status = attempt if attempt else ([], [])
             attempt_chain = list(attempt_chain)

@@ -285,26 +285,25 @@ class OpenBottleManipulation(BaseManipulation) :
                 current_count[env_id] = 0
 
             hand_pose = self.env.hand_rigid_body_tensor[:,:7]
-
+            # approach / pre-grasp / grasp-close intentionally do not call
+            # `_record_video_frame()` so the manip-side mp4 stays 1:1
+            # aligned with the manip zarr.
             pre_pose = self.env.adjust_hand_pose.clone()
             pre_pose[:,2] += self.env.gripper_length*2
 
             for i in range(3):
                 for j in range(10):
                     self.env.step(pre_pose)
-                self._record_video_frame()
 
             # grasp the handle
             pre_pose[:, 2] -= self.env.gripper_length + 0.008
             for i in range(3):
                 for j in range(10):
                     self.env.step(pre_pose)
-                self._record_video_frame()
 
             self.env.gripper = True
             for i in range(10):
                 self.env.step(hand_pose)
-            self._record_video_frame()
 
             init_actions = self.action_process(hand_pose)
             self.env.actions = init_actions
@@ -399,12 +398,12 @@ class OpenBottleManipulation(BaseManipulation) :
                 for env_id in range(self.env.num_envs):
                     if (torch.abs(self.env.one_dof_tensor[env_id, 0]) > 0.04).cpu().item() and not done_flag[env_id]:
                         _flush(env_id, success=True)
-                        demo_buffer.append(eps_buffer[env_id])
                         done_flag[env_id] = True
+                        self._mark_env_video_done(env_id)
                         succ_cnt[env_id] += 1
                         print(f"Env {env_id} Succeeded")
             print(succ_cnt)
-            self.collect_episode_end(ctx, eps, done_flag)
+            self.collect_episode_end(ctx, eps, done_flag, eps_buffer, demo_buffer)
 
         self.collect_finalize(ctx, demo_buffer)
     

@@ -258,26 +258,25 @@ class OpenWindowManipulation(BaseManipulation) :
             print("eps_{}".format(eps+1))
             self.env.reset()
             self.collect_episode_start(ctx, eps)
-
+            # approach / pre-grasp / grasp-close intentionally do not call
+            # `_record_video_frame()` so the manip-side mp4 stays 1:1
+            # aligned with the manip zarr.
             pre_pose = self.env.adjust_hand_pose.clone()
             pre_pose[:,2] += 0.01
             pre_pose[:,0] += self.env.gripper_length*2
             for i in range(3):
                 for j in range(10):
                     self.env.step(pre_pose)
-                self._record_video_frame()
             pre_pose[:, 0] -= self.env.gripper_length + 0.012
             for i in range(3):
                 for j in range(10):
                     self.env.step(pre_pose)
-                self._record_video_frame()
 
             hand_pose = self.env.hand_rigid_body_tensor[:,:7]
 
             self.env.gripper = True
             for i in range(10):
                 self.env.step(hand_pose)
-            self._record_video_frame()
             init_actions = self.action_process(hand_pose)
             self.env.actions = init_actions
             ####################start collect manipulation data###################
@@ -415,12 +414,12 @@ class OpenWindowManipulation(BaseManipulation) :
                             )
                             current_op[env_id] = None
                             current_count[env_id] = 0
-                        demo_buffer.append(eps_buffer[env_id])
                         done_flag[env_id] = True
+                        self._mark_env_video_done(env_id)
                         succ_cnt[env_id] += 1
                         print(f"Env {env_id} Succeeded")
             print(succ_cnt)
-            self.collect_episode_end(ctx, eps, done_flag)
+            self.collect_episode_end(ctx, eps, done_flag, eps_buffer, demo_buffer)
 
         self.collect_finalize(ctx, demo_buffer)
     
