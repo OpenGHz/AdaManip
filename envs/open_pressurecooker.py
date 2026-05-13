@@ -456,19 +456,21 @@ class OpenPressureCooker(BaseEnv):
             else:
                 use_clockwise = np.random.rand() < self.cfg["env"]["clockwise"]
             if use_clockwise:
-                # clock wise
+                # clock wise — handle locked: rotate is required before lift.
                 self.clock_wise[env_id] = 1
                 random_lower = -(limit_random*np.random.rand()+1-limit_random)* dof_props['upper'][1]
-                # random_lower = - dof_props['upper'][1]
                 dof_props['lower'][1] = random_lower
                 dof_props['upper'][1] = 0.0
-                # print(dof_props['lower'][1], dof_props['upper'][1])
+                self.open_bottle_stage[env_id] = 0
             else:
-                # counter clock wise
+                # counter clock wise — handle already openable, lift
+                # directly works. Set open_bottle_stage True so
+                # refresh_mechanism unlocks DOF[0] (lift) on next step.
                 self.clock_wise[env_id] = 0
                 random_upper = (limit_random*np.random.rand()+1-limit_random)* dof_props['upper'][1]
                 dof_props['upper'][1] = random_upper
                 dof_props['lower'][1] = 0.0
+                self.open_bottle_stage[env_id] = 1
             dof_props["driveMode"] = (gymapi.DOF_MODE_EFFORT, gymapi.DOF_MODE_EFFORT)
         else:
             print("Unrecognized task!\nTask should be one of: [leverdoor, rounddoor, opendoor]")

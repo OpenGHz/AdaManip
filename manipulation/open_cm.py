@@ -391,7 +391,7 @@ class OpenCoffeeMachineManipulation(BaseManipulation) :
             action = 'z' if np.random.rand() < 0.5 else 'r'
             self.env.action_chosen[env_id, t] = action
             return action
-        elif -dof < self.env.try_range:
+        elif -dof < self.env.try_range and not open_flag:
             action = "r"
             self.env.action_chosen[env_id, t] = action
             return action

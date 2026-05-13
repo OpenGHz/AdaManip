@@ -476,19 +476,23 @@ class OpenBottle(BaseEnv):
             else:
                 use_clockwise = np.random.rand() < self.cfg["env"]["clockwise"]
             if use_clockwise:
-                # clock wise
+                # clock wise — cap locked: rotate (in the negative dof
+                # direction) is required before lift becomes possible.
                 self.clock_wise[env_id] = 1
                 random_lower = -(limit_random*np.random.rand()+1-limit_random)* dof_props['upper'][1]
-                # random_lower = - dof_props['upper'][1]
                 dof_props['lower'][1] = random_lower
                 dof_props['upper'][1] = 0.0
-                # print(dof_props['lower'][1], dof_props['upper'][1])
+                self.open_bottle_stage[env_id] = 0
             else:
-                # counter clock wise
+                # counter clock wise — cap is already openable, lift
+                # directly works. open_bottle_stage is set True so
+                # refresh_mechanism unlocks DOF[0] (lift) on the next
+                # step.
                 self.clock_wise[env_id] = 0
                 random_upper = (limit_random*np.random.rand()+1-limit_random)* dof_props['upper'][1]
                 dof_props['upper'][1] = random_upper
                 dof_props['lower'][1] = 0.0
+                self.open_bottle_stage[env_id] = 1
             dof_props["driveMode"] = (gymapi.DOF_MODE_POS, gymapi.DOF_MODE_POS)
         else:
             print("Unrecognized task!\nTask should be one of: [leverdoor, rounddoor, opendoor]")
@@ -668,6 +672,11 @@ class OpenBottle(BaseEnv):
                                                                                     device=self.device)
 
                 self.mechanism_flag[env_id] = 0
+                # open_bottle_stage is set inside init_obj_dof_state based
+                # on the per-env clock_wise value (0 for cw=1 locked envs,
+                # 1 for cw=0 already-unlocked envs); without this reset
+                # the env-level step rule `new | old` would carry the
+                # previous episode's unlocked state forward.
 
         self.gripper = False
 

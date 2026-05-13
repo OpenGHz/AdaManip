@@ -448,7 +448,11 @@ class OpenPenManipulation(BaseManipulation) :
                 action = 'r' if clock_wise else 'o'
             self.env.action_chosen[env_id, t] = action
             return action
-        elif abs(dof) < self.env.try_range:
+        elif abs(dof) < self.env.try_range and not open_flag:
+            # Cap still locked and not yet rotated past try_range —
+            # forced rotate in the cw-correct direction. Skip when the
+            # cap is already unlocked (cw=0 envs after the env init sets
+            # open_bottle_stage True) so the lift path can stay 1-stage.
             if clock_wise:
                 self.env.action_chosen[env_id,t] = "r"
                 return "r"

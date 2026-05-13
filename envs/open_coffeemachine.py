@@ -457,19 +457,21 @@ class OpenCoffeeMachine(BaseEnv):
             else:
                 use_clockwise = np.random.rand() < self.cfg["env"]["clockwise"]
             if use_clockwise:
-                # clock wise
+                # clock wise — handle locked: rotate is required before pull.
                 self.clock_wise[env_id] = 1
                 random_lower = -(limit_random*np.random.rand()+1-limit_random)* dof_props['upper'][1]
-                # random_lower = - dof_props['upper'][1]
                 dof_props['lower'][1] = random_lower
                 dof_props['upper'][1] = 0.0
-                # print(dof_props['lower'][1], dof_props['upper'][1])
+                self.open_bottle_stage[env_id] = 0
             else:
-                # counter clock wise
+                # counter clock wise — handle already openable, pull
+                # directly works. Set open_bottle_stage True so
+                # refresh_mechanism unlocks DOF[0] (pull) on next step.
                 self.clock_wise[env_id] = 0
                 random_upper = (limit_random*np.random.rand()+1-limit_random)* dof_props['upper'][1]
                 dof_props['upper'][1] = random_upper
                 dof_props['lower'][1] = 0.0
+                self.open_bottle_stage[env_id] = 1
             dof_props["driveMode"] = (gymapi.DOF_MODE_EFFORT, gymapi.DOF_MODE_EFFORT)
         else:
             print("Unrecognized task!\nTask should be one of: [leverdoor, rounddoor, opendoor]")
@@ -644,9 +646,12 @@ class OpenCoffeeMachine(BaseEnv):
                                                                                     device=self.device)
 
                 self.mechanism_flag[env_id] = 0
+                # open_bottle_stage is set inside init_obj_dof_state based
+                # on the per-env clock_wise value (1 for cw=0 already-openable,
+                # 0 for cw=1 locked); doing it per-env avoids clobbering
+                # the state of unrelated envs when to_reset is partial.
 
         self.gripper = False
-        self.open_bottle_stage = torch.zeros((self.num_envs,),device=self.device)
         self.actions = torch.zeros((self.num_envs, self.num_actions), device=self.device)
         # Clear override so subsequent resets without one fall back to random.
         self._clock_wise_override = None
