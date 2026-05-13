@@ -5,6 +5,41 @@ task:
   policy: "adaptive"
   max_step: 25
 
+  save_inference_data: false
+
+  adaptive_language:
+    enable: false
+    max_retry_rounds: 3
+    asker:
+      platform: ground-truth        # ground-truth | codex-cli | claude-cli | gemini | foxcode | ""
+      model: gpt-5.5
+      mock: false
+      prompt_style: structured
+      check_success: together
+      frame_max_count: 12
+      frame_stride: 1
+      camera_id: 1
+      trajectory_context: true
+      trajectory_representation: delta
+      trajectory_sample_points: 0
+      recategorize_videos: true
+      lock_on_env_success: false
+      claude_cli_command: claude
+      claude_cli_skip_permissions: true
+      claude_cli_timeout: 900
+      codex_cli_command: codex
+      codex_cli_timeout: 900
+      codex_cli_sandbox: read-only
+      codex_cli_approval_policy: never
+      codex_cli_cd: ""
+      codex_cli_ephemeral: true
+      codex_cli_effort: xhigh
+      gemini_temperature: 1.0
+      gemini_thinking_budget: -1
+      gemini_image_thinking_budget: 0
+      gemini_upload_poll_interval: 1.0
+      gemini_upload_timeout: 600
+
 model:
   # policy_mode: diffusion
   policy_mode: flow_matching
@@ -30,6 +65,10 @@ model:
   # diffusion_model_path: logs/manip_pc/Mar13/04-06-04/ema_nets.pth
   grasp_model_path: logs/grasp_pc_6_eps20_clock0/Mar13/07-27-18/ema_nets.pth
   diffusion_model_path: logs/manip_pc/Mar13/07-27-24/ema_nets.pth
+  use_language_conditioning: True
+  language_input_dim: 512
+  language_proj_dim: 128
+  # language_embedding_dict_path: <checkpoint-dir>/language_embedding_dict.json
   collectData: False
 
 env:
