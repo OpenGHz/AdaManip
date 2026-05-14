@@ -993,6 +993,66 @@ class BaseManipulation:
     # Language embedding bank
     # =====================================================================
 
+    def _validate_ckpt_language_template_compat(self, ckpt_path) -> None:
+        """Cross-check ckpt-side ``language_expanded.json`` against eval cfg.
+
+        Training writes ``language_expanded.json`` next to the manip ckpt
+        capturing the task name and expanded chains used to produce the
+        embedding bank (see ``_copy_language_embedding_dict_to_logdir``).
+        At eval we recompute those from the live cfg. If they disagree the
+        policy will receive language embeddings it never saw and the env's
+        ``one_go``-gated physics may not match either — fail loudly here
+        rather than silently degrade success rate.
+
+        No-op when the sidecar is absent (legacy ckpt).
+        """
+        if ckpt_path is None:
+            return
+        ckpt_expanded_path = Path(ckpt_path).resolve().parent / "language_expanded.json"
+        if not ckpt_expanded_path.exists():
+            return
+        try:
+            with ckpt_expanded_path.open("r", encoding="utf-8") as f:
+                ckpt_expanded = json.load(f)
+        except Exception as e:
+            raise RuntimeError(
+                f"failed to read ckpt language_expanded.json ({ckpt_expanded_path}): {e}"
+            )
+
+        eval_task_name = self.language_template_task_name()
+        ckpt_task_name = ckpt_expanded.get("task")
+        if ckpt_task_name is not None and ckpt_task_name != eval_task_name:
+            raise RuntimeError(
+                "ckpt vs eval language-template task mismatch:\n"
+                f"  ckpt was trained with task={ckpt_task_name!r} "
+                f"(see {ckpt_expanded_path})\n"
+                f"  eval is running with task={eval_task_name!r}\n"
+                "Most common cause: cfg.task.one_go differs from training. "
+                "Either set cfg.task.one_go to match the ckpt, or point "
+                "cfg.model.diffusion_model_path at a ckpt trained with the "
+                "current one_go setting."
+            )
+
+        ckpt_chains = ckpt_expanded.get("expanded_minimal_chains")
+        if ckpt_chains is None:
+            return
+        try:
+            _, task_spec = self.load_task_language_template(eval_task_name)
+            eval_chains = self.build_expanded_minimal_chains(task_spec["minimal_chains"])
+        except Exception:
+            return
+        ckpt_chains_norm = [list(c) for c in ckpt_chains]
+        eval_chains_norm = [list(c) for c in eval_chains]
+        if ckpt_chains_norm != eval_chains_norm:
+            raise RuntimeError(
+                "ckpt vs eval expanded_minimal_chains mismatch:\n"
+                f"  ckpt ({ckpt_expanded_path}): {ckpt_chains_norm}\n"
+                f"  eval (cfg/language_template.json:{eval_task_name}): {eval_chains_norm}\n"
+                "Language conditioning vectors will not match what the model "
+                "was trained on. Re-train, or restore cfg/language_template.json "
+                "to the version used at training."
+            )
+
     def _load_eval_language_embedding_bank(self, diffusion):
         if not getattr(diffusion.args, "use_language_conditioning", False):
             return None
@@ -1562,6 +1622,12 @@ class BaseManipulation:
                 )
             grasp_net = None
             diffusion = models[0]
+
+        # Fail fast on ckpt/cfg drift (one_go flag, language template edits,
+        # wrong ckpt for current task, etc.) before any rollout runs.
+        self._validate_ckpt_language_template_compat(
+            getattr(diffusion.args, "ckpt_path", None)
+        )
 
         # Episode count: prefer task.num_eval_episode, fall back to task.num_episode.
         eps_num = int(task_cfg.get("num_eval_episode", task_cfg.get("num_episode", 1)))
