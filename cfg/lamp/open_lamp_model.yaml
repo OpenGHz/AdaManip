@@ -5,7 +5,7 @@ task:
   num_eval_episode: 10
   max_step: 10
 
-  save_inference_data: false
+  save_inference_data: true
 
   adaptive_language:
     enable: false

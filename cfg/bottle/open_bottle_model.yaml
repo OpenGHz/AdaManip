@@ -6,7 +6,7 @@ task:
   seed: 0
   max_step: 24
 
-  save_inference_data: false
+  save_inference_data: true
 
   adaptive_language:
     enable: false

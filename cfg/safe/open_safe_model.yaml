@@ -6,7 +6,7 @@ task:
   seed: 6
   grasp: False
 
-  save_inference_data: false
+  save_inference_data: true
 
   adaptive_language:
     enable: false
@@ -42,8 +42,8 @@ task:
       gemini_upload_timeout: 600
 
 model:
-  # policy_mode: diffusion
-  policy_mode: flow_matching
+  policy_mode: diffusion
+  # policy_mode: flow_matching
   obs_horizon: 4
   action_horizon: 1
   pred_horizon: 4
@@ -61,7 +61,7 @@ model:
   grasp: False 
   grasp_model_path: None
   diffusion_model_path: logs/safe/manip/May13/18-08-08/ema_nets.pth
-  use_language_conditioning: True
+  use_language_conditioning: false
   language_input_dim: 512
   language_proj_dim: 128
 
