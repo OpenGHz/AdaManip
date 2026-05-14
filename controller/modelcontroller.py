@@ -1,3 +1,5 @@
+import copy
+
 from envs.base_env import BaseEnv
 from manipulation.base_manipulation import BaseManipulation
 from controller.base_controller import BaseController
@@ -51,7 +53,14 @@ class ModelController(BaseController) :
         else:
             from diffusion_policy.diffusion_policy_new import DiffusionPolicy
         if self.args.grasp:
-            self.grasp_net = DiffusionPolicy(self.args)
+            # Grasp policy is purely vision+state; its ckpt is trained with
+            # use_language_conditioning=False (forced in diffusion_train.py
+            # for task_stage='grasp'). Build the eval-time grasp_net the
+            # same way so the state_dict shapes match — manip_net keeps the
+            # cfg's setting (typically True).
+            grasp_args = copy.copy(self.args)
+            grasp_args.use_language_conditioning = False
+            self.grasp_net = DiffusionPolicy(grasp_args)
             self.grasp_net.load_checkpoint(self.args.grasp_path)
             self.grasp_net.nets.eval()
         self.manip_net = DiffusionPolicy(self.args)
