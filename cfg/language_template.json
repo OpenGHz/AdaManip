@@ -32,7 +32,8 @@
       "minimal_chains": [
         "向上提起笔盖",
         "Nx旋转笔盖 -> 向上提起笔盖"
-      ]
+      ],
+      "success_check_additional_prompt": "笔盖不需完全脱离笔身，只要明显地被向上提起了就算成功了。"
     },
     "pen_one_go": {
       "command": "打开笔",
@@ -43,7 +44,8 @@
       "minimal_chains": [
         "向上提起笔盖",
         "旋转笔盖 -> 向上提起笔盖"
-      ]
+      ],
+      "success_check_additional_prompt": "笔盖不需完全脱离笔身，只要明显地被向上提起了就算成功了。"
     },
     "pressure_cooker": {
       "command": "打开高压锅",
