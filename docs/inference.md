@@ -1,9 +1,9 @@
 # AdaManip Inference / Evaluation Flow
 
-本文档整理当前 microwave 模型推理流程。示例入口脚本：
+本文档整理当前模型推理流程。示例入口脚本：
 
 ```bash
-sh third_party/ada_manip/scripts/microwave/eval_microwave_model.sh
+sh third_party/ada_manip/scripts/eval.sh microwave
 ```
 
 脚本内部使用仓库根目录的 pixi manifest，并分别启动两个运行环境：
@@ -13,7 +13,7 @@ sh third_party/ada_manip/scripts/microwave/eval_microwave_model.sh
 
 ## 1. 启动参数
 
-`scripts/microwave/eval_microwave_model.sh` 的默认参数如下：
+`scripts/eval.sh <task>` 会按任务名选择默认参数。`microwave` 的默认参数如下：
 
 ```bash
 TASK_NAME=OpenMicroWave
@@ -33,7 +33,7 @@ ADA_MANIP_RPYC_HOST=localhost \
 ADA_MANIP_RPYC_PORT=18861 \
 ADA_MANIP_SIM_DEVICE=cuda:0 \
 ADA_MANIP_SEED=0 \
-sh third_party/ada_manip/scripts/microwave/eval_microwave_model.sh
+sh third_party/ada_manip/scripts/eval.sh microwave
 ```
 
 脚本会根据自身路径定位：
@@ -326,7 +326,7 @@ eval_data/
 如需把这些日志保存成文件，需要在运行脚本时自行重定向或使用 `tee`，例如：
 
 ```bash
-sh third_party/ada_manip/scripts/microwave/eval_microwave_model.sh 2>&1 | tee eval_microwave.log
+sh third_party/ada_manip/scripts/eval.sh microwave 2>&1 | tee eval_microwave.log
 ```
 
 当 `env.collectRGBVideo=True` 时，同一个 run 目录下会额外包含 `rgb_videos/`：
@@ -562,19 +562,19 @@ env:
 如果 `18861` 被占用：
 
 ```bash
-ADA_MANIP_RPYC_PORT=18862 sh third_party/ada_manip/scripts/microwave/eval_microwave_model.sh
+ADA_MANIP_RPYC_PORT=18862 sh third_party/ada_manip/scripts/eval.sh microwave
 ```
 
 server 与 client 必须使用同一个 host/port。
 
 ### 6.5 真实 headless 运行
 
-若需要 IsaacGym server 无窗口运行，需要在 `eval_microwave_model.sh` 的 server 命令中启用 `--headless`。client 端的 `--headless` 不会影响 server 端窗口。
+若需要 IsaacGym server 无窗口运行，给通用入口设置 `ADA_MANIP_SERVER_HEADLESS=1`。client 端的 `--headless` 不会影响 server 端窗口。
 
 ## 7. 当前流程摘要
 
 ```text
-eval_microwave_model.sh
+eval.sh <task>
   |
   |-- ada-data / rpyc-server
   |     run.py
@@ -826,7 +826,7 @@ pixi run -e ada-manip python scripts/eval_video2prompt.py \
 **测试 1：保持默认（自适应关闭）**——回归校验。
 
 ```bash
-sh third_party/ada_manip/scripts/microwave/eval_microwave_model.sh
+sh third_party/ada_manip/scripts/eval.sh microwave
 ```
 预期：日志和视频目录与今天一致，每个 episode 仍然打印
 `episode N language embedding id: X`，没有 `[adaptive] ...` 前缀。

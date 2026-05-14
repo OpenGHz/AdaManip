@@ -52,13 +52,13 @@ env:
 
 ## 推理阶段随机化
 
-推理脚本 [scripts/microwave/eval_microwave_model.sh](../scripts/microwave/eval_microwave_model.sh)
+推理脚本 [scripts/eval.sh](../scripts/eval.sh)
 通过 `ADA_MANIP_SEED` 控制 seed，默认是 `0`：
 
 ```bash
 ADA_MANIP_SEED=42 \
 ADA_MANIP_CFG_ENV=cfg/microwave/exp_ground_truth_prompt_eps5.yaml \
-sh third_party/ada_manip/scripts/microwave/eval_microwave_model.sh
+sh third_party/ada_manip/scripts/eval.sh microwave
 ```
 
 脚本会把同一个 seed 同时传给 rpyc server 和 client：
