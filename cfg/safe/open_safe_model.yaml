@@ -42,8 +42,8 @@ task:
       gemini_upload_timeout: 600
 
 model:
-  policy_mode: diffusion
-  # policy_mode: flow_matching
+  # policy_mode: diffusion
+  policy_mode: flow_matching
   obs_horizon: 4
   action_horizon: 1
   pred_horizon: 4
@@ -60,12 +60,17 @@ model:
   Transformer: False
   grasp: False 
   grasp_model_path: None
-  diffusion_model_path: './ckpt/safe/manip_safe.pth'
+  diffusion_model_path: logs/safe/manip/May13/18-08-08/ema_nets.pth
   use_language_conditioning: True
   language_input_dim: 512
   language_proj_dim: 128
-  # language_embedding_dict_path: <checkpoint-dir>/language_embedding_dict.json
 
+train:
+  manip:
+    dataset_path:
+      - ./demo_data/open_safe_adaptive_8_eps20_clock0.55/demo_data.zip
+    batch_size: 48
+    num_epochs: 1000
 
 env:
   env_name: "open safe"

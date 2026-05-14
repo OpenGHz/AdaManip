@@ -1,1 +1,0 @@
-python diffusion_train.py --dataset_path ./demo_data/open_pen_grasp_adaptive_10_eps20_clock0.5/demo_data.zip --batch_size 64 --num_epochs 800 --obs_horizon 2

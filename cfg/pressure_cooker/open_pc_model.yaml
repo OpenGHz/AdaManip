@@ -69,6 +69,19 @@ model:
   language_input_dim: 512
   language_proj_dim: 128
   # language_embedding_dict_path: <checkpoint-dir>/language_embedding_dict.json
+
+train:
+  manip:
+    dataset_path:
+      - ./demo_data/open_pressurecooker_manip_adaptive_6_eps20_clock0.0/demo_data.zip
+    batch_size: 64
+    num_epochs: 800
+  grasp:
+    dataset_path:
+      - ./demo_data/open_pressurecooker_grasp_adaptive_6_eps20_clock0.0/demo_data.zip
+    batch_size: 64
+    num_epochs: 800
+
   collectData: False
 
 env:

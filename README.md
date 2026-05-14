@@ -62,13 +62,13 @@ sh scripts/microwave/collect_mv.sh
 ### Policy Training
 
 ```sh
-sh scripts/microwave/diffusion_train_mv_manip.sh
+sh scripts/train.sh microwave manip
 ```
 
 ### Evaluation
 
 ```sh
-sh scripts/microwave/eval_mv_model.sh
+sh scripts/eval.sh microwave
 ```
 
 Note: Configuration files are located in the **cfg** folder. Please ensure the model checkpoint path is correctly set before running evaluation.

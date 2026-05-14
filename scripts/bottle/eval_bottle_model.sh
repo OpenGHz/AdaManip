@@ -1,1 +1,0 @@
-python run.py --task=OpenBottle --controller=ModelController --manipulation=OpenBottleManipulation --sim_device=cuda:0 --seed=0 --pipeline=gpu --cfg_env=cfg/bottle/open_bottle_model.yaml

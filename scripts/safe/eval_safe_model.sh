@@ -1,1 +1,0 @@
-python run.py --task=OpenSafe --controller=ModelController --manipulation=OpenSafeManipulation --sim_device=cuda:0 --seed=0 --pipeline=gpu --cfg_env=cfg/safe/open_safe_model.yaml

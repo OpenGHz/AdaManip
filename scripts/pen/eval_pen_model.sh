@@ -1,1 +1,0 @@
-python run.py --task=OpenPen --controller=ModelController --manipulation=OpenPenManipulation --sim_device=cuda:0 --seed=0 --pipeline=gpu --cfg_env=cfg/pen/open_pen_model.yaml

@@ -1,1 +1,0 @@
-python run.py --task=OpenCoffeeMachine --controller=ModelController --manipulation=OpenCoffeeMachineManipulation --sim_device=cuda:0 --seed=1 --pipeline=gpu --cfg_env=cfg/cm/open_cm_model.yaml

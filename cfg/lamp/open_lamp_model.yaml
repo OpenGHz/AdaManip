@@ -78,6 +78,18 @@ model:
   language_proj_dim: 128
   # language_embedding_dict_path: <checkpoint-dir>/language_embedding_dict.json
 
+train:
+  manip:
+    dataset_path:
+      - ./demo_data/open_lamp_manip_adaptive_7_eps20_clock0.5/demo_data.zip
+    batch_size: 64
+    num_epochs: 800
+  grasp:
+    dataset_path:
+      - ./demo_data/open_lamp_grasp_adaptive_7_eps20_clock0.5/demo_data.zip
+    batch_size: 64
+    num_epochs: 800
+
 env:
   env_name: "open lamp"
   numEnvs: 7
