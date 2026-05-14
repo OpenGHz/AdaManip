@@ -263,6 +263,13 @@ if __name__ == '__main__':
         args.task_name = 'unknown_task'
     if args.task_stage is None:
         args.task_stage = 'manip'
+    if args.task_stage == 'grasp' and args.use_language_conditioning:
+        # Grasp data has no language sidecars; the grasp policy is purely
+        # vision+state. Forcing this off here keeps a manip-oriented cfg
+        # (where ``model.use_language_conditioning: True`` is the norm)
+        # reusable for ``train.sh <task> grasp`` without per-cfg overrides.
+        print('task_stage=grasp: forcing use_language_conditioning=False')
+        args.use_language_conditioning = False
     if args.dry_run:
         print_resolved_args(args)
         sys.exit(0)
