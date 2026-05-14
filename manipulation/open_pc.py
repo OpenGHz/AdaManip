@@ -91,9 +91,11 @@ class OpenPressureCookerManipulation(BaseManipulation) :
     def concrete_attempt_chain_for_collect(self, env_id: int, state: Dict[str, Any]):
         chains = getattr(self, "_pc_attempt_chains", None)
         statuses = getattr(self, "_pc_stage_statuses", None)
+        # Grasp-data flow: see open_bottle.py for full rationale.
+        if chains is None:
+            return None
         if (
-            chains is not None
-            and statuses is not None
+            statuses is not None
             and env_id < len(chains)
             and chains[env_id]
         ):

@@ -123,9 +123,13 @@ class OpenDoorManipulation(BaseManipulation) :
         # status [False, False, True, True]).
         chains = getattr(self, "_door_attempt_chains", None)
         statuses = getattr(self, "_door_stage_statuses", None)
+        # Grasp-data flow: see open_bottle.py for full rationale.
+        if chains is None:
+            return None
         if (
-            chains is not None and statuses is not None
-            and env_id < len(chains) and chains[env_id]
+            statuses is not None
+            and env_id < len(chains)
+            and chains[env_id]
         ):
             return list(chains[env_id]), list(statuses[env_id])
         return super().concrete_attempt_chain_for_collect(env_id, state)

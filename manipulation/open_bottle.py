@@ -97,9 +97,16 @@ class OpenBottleManipulation(BaseManipulation) :
     def concrete_attempt_chain_for_collect(self, env_id: int, state: Dict[str, Any]):
         chains = getattr(self, "_bottle_attempt_chains", None)
         statuses = getattr(self, "_bottle_stage_statuses", None)
+        # Grasp-data flow doesn't run the Nx attempt-chain state machine,
+        # so falling through to the base default would return the
+        # literal-Nx canonical chain (e.g. ``['Nx旋转瓶盖', '向上提起瓶盖']``)
+        # which match_command_chains can't match against the concrete-N
+        # bank. Return None so collect_episode_end records an empty
+        # attempt_chain — grasp trajectories don't need chain metadata.
+        if chains is None:
+            return None
         if (
-            chains is not None
-            and statuses is not None
+            statuses is not None
             and env_id < len(chains)
             and chains[env_id]
         ):
