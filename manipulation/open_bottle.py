@@ -72,13 +72,15 @@ class OpenBottleManipulation(BaseManipulation) :
         self, env_id: int, state: Dict[str, Any]
     ) -> Optional[List[str]]:
         # See open_pen.py for full rationale.
+        # Grasp-data flow doesn't track rotations (collect_grasp_data never
+        # initializes `_bottle_intrinsic_n`). When the attribute is absent,
+        # silently return the canonical chain instead of going through the
+        # Nx machinery (which would warn-banner per env, per episode).
+        n_min_list = getattr(self, "_bottle_intrinsic_n", None)
+        if n_min_list is None:
+            return self.canonical_minimal_chain_for_state(state)
         if self._one_go:
-            n_min_list = getattr(self, "_bottle_intrinsic_n", None)
-            if (
-                n_min_list is not None
-                and env_id < len(n_min_list)
-                and n_min_list[env_id] is not None
-            ):
+            if env_id < len(n_min_list) and n_min_list[env_id] is not None:
                 if int(n_min_list[env_id]) == 0:
                     return ["向上提起瓶盖"]
                 return ["旋转瓶盖", "向上提起瓶盖"]

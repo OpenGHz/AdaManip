@@ -69,13 +69,12 @@ class OpenPressureCookerManipulation(BaseManipulation) :
         self, env_id: int, state: Dict[str, Any]
     ) -> Optional[List[str]]:
         # See open_pen.py for full rationale.
+        # Grasp-data flow doesn't track rotations; silent canonical fallback.
+        n_min_list = getattr(self, "_pc_intrinsic_n", None)
+        if n_min_list is None:
+            return self.canonical_minimal_chain_for_state(state)
         if self._one_go:
-            n_min_list = getattr(self, "_pc_intrinsic_n", None)
-            if (
-                n_min_list is not None
-                and env_id < len(n_min_list)
-                and n_min_list[env_id] is not None
-            ):
+            if env_id < len(n_min_list) and n_min_list[env_id] is not None:
                 if int(n_min_list[env_id]) == 0:
                     return ["向上提起把手"]
                 return ["旋转把手", "向上提起把手"]

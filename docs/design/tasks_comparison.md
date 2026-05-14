@@ -20,9 +20,10 @@ split 任务的 `cfg.task.grasp` / `cfg.model.grasp` 区分采集 / 推理两侧
 | 类别 | 任务 | 旋转 op | lift / final op | template `minimal_chains` 形态 |
 |---|---|---|---|---|
 | **non-Nx** | `microwave` | – | `拉门`（兼按按钮）| 单 stage 或两 stage 固定 |
-| **non-Nx** | `door` / `window` | `顺时针旋转把手` / `逆时针旋转把手` | `拉开门` / `拉开窗户` | `[rotate, lift]` 两 stage 固定 |
 | **non-Nx** | `safe` | `顺时针旋转旋钮` / `逆时针旋转旋钮` | `拉门` | `[lift]` 或 `[rotate, lift]` |
 | **non-Nx** | `lamp` | `顺时针旋转开关` / `逆时针旋转开关` | `推开关` | 单 stage |
+| **non-Nx** | `door_one_go` / `window_one_go` | `顺时针旋转把手` / `逆时针旋转把手` | `拉开门` / `拉开窗户` | `[rotate, lift]` 两 stage 固定（one_go 单步旋转跨阈值） |
+| **Nx** | `door` / `window` | `顺时针旋转把手` / `逆时针旋转把手` | `拉开门` / `拉开窗户` | `[lift]` 或 `[Nx rotate, lift]`，N 由 env 物理决定 |
 | **Nx** | `bottle` / `pen` / `pressure_cooker` / `coffee_maker` | `旋转<part>` | `向上提起<part>` 或 `拉动手柄` | `[lift]` 或 `[Nx rotate, lift]`，N 由 env 物理决定 |
 
 `Nx` 任务的特殊之处：
@@ -74,8 +75,8 @@ split 任务的 `cfg.task.grasp` / `cfg.model.grasp` 区分采集 / 推理两侧
 | `canonical_minimal_chain_for_state` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `per_env_extra_log_fields` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `reset_kwargs_initial` | ✓ | ✓ | ✓ | – | – | – | – | – | – |
-| `concrete_attempt_chain_for_collect` | ✓ | – | – | – | – | ✓ | ✓ | ✓ | ✓ |
-| `ground_truth_chain_for_collect` | – | – | – | – | – | ✓ | ✓ | ✓ | ✓ |
+| `concrete_attempt_chain_for_collect` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `ground_truth_chain_for_collect` | – | – | ✓ | ✓ | – | ✓ | ✓ | ✓ | ✓ |
 | `dataset_dir_suffix` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `collect_grasp_data` | – | – | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `collect_manip_data` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
@@ -84,8 +85,8 @@ split 任务的 `cfg.task.grasp` / `cfg.model.grasp` 区分采集 / 推理两侧
 观察：
 
 - 7 个钩子是**所有 9 个任务都 override** 的"任务身份"基础（task_name、cw 状态记录与还原、success 判定、canonical chain、log 字段）。
-- `concrete_attempt_chain_for_collect`：仅 5 个有 demo 重试的任务 override（microwave 多次按按钮拉门 + 4 个 Nx 任务转-提循环）。
-- `ground_truth_chain_for_collect`：仅 4 个 Nx 任务 override（其它任务用 base 默认 `canonical_minimal_chain_for_state` 即可）。
+- `concrete_attempt_chain_for_collect`：**所有 9 个任务**都 override，因为每个任务的 adaptive demo 都可能产生重试/失败-切换片段（microwave 多次按按钮拉门；safe 三向初始动作 + 失败 pull 切 rotate；door / window / lamp 试错方向；4 个 Nx 任务的转-提循环）。
+- `ground_truth_chain_for_collect`：6 个 Nx 任务 override（door / window / bottle / pen / pressure_cooker / coffee_maker），需要从 env 物理记录的 `intrinsic_n` 填具体 N 才能给出 ground-truth chain；其它 3 个 non-Nx 任务（microwave / safe / lamp）用 base 默认 `canonical_minimal_chain_for_state` 即可。这些 override 在 grasp-data 流程下会通过 `getattr(self, '_<task>_intrinsic_n', None) is None` 检测到 attribute 未初始化、静默回退到 canonical chain，避免 grasp 期间刷屏 warning。
 - `reset_kwargs_initial`：3 个 unified / 简单任务（microwave / safe / door）显式声明 `clock_same=False`；其余依赖 env 默认 `clock_same=True`。
 - split 任务都 override `collect_grasp_data` + `diffusion_eval_grasp`；unified 任务不需要。
 

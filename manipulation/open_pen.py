@@ -74,17 +74,19 @@ class OpenPenManipulation(BaseManipulation) :
         # first transitioned to True (env-physics fact, deterministic per
         # env state). All shared logic — lookup + warn-on-miss fallback —
         # lives in BaseManipulation.ground_truth_chain_from_intrinsic_n.
+        # Grasp-data flow doesn't track rotations (collect_grasp_data never
+        # initializes `_pen_intrinsic_n`). When the attribute is absent,
+        # silently return the canonical chain instead of going through the
+        # Nx machinery (which would warn-banner per env, per episode).
+        n_min_list = getattr(self, "_pen_intrinsic_n", None)
+        if n_min_list is None:
+            return self.canonical_minimal_chain_for_state(state)
         if self._one_go:
             # one_go physics: a single rotation crosses the threshold, so
             # the chain has no Nx prefix. Whether rotation is needed at all
             # is still env-state-dependent (cw=0 envs may start with the
             # cap already loose), so consult intrinsic_n.
-            n_min_list = getattr(self, "_pen_intrinsic_n", None)
-            if (
-                n_min_list is not None
-                and env_id < len(n_min_list)
-                and n_min_list[env_id] is not None
-            ):
+            if env_id < len(n_min_list) and n_min_list[env_id] is not None:
                 if int(n_min_list[env_id]) == 0:
                     return ["向上提起笔盖"]
                 return ["旋转笔盖", "向上提起笔盖"]

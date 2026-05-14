@@ -74,14 +74,16 @@ class OpenWindowManipulation(BaseManipulation) :
         cw = state.get("clock_wise") if state else None
         if cw is None:
             return None
+        # Grasp-data flow doesn't track rotations (collect_grasp_data never
+        # initializes `_window_intrinsic_n`). When the attribute is absent,
+        # silently return the canonical chain instead of going through the
+        # Nx machinery (which would warn-banner per env, per episode).
+        n_min_list = getattr(self, "_window_intrinsic_n", None)
+        if n_min_list is None:
+            return self.canonical_minimal_chain_for_state(state)
         rotate_op = "顺时针旋转把手" if int(round(float(cw))) == 1 else "逆时针旋转把手"
         if self._one_go:
-            n_min_list = getattr(self, "_window_intrinsic_n", None)
-            if (
-                n_min_list is not None
-                and env_id < len(n_min_list)
-                and n_min_list[env_id] is not None
-            ):
+            if env_id < len(n_min_list) and n_min_list[env_id] is not None:
                 # window's bank has no zero-rotation chain — even when
                 # ``intrinsic_n == 0`` we still emit the direction-keyed
                 # rotate→pull chain so trajectory mc_id resolves cleanly.
