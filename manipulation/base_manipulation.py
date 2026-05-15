@@ -1053,6 +1053,29 @@ class BaseManipulation:
                 "to the version used at training."
             )
 
+    def _print_per_env_success_summary(self, eval_save_dir) -> None:
+        """Print the per-env success table at the end of a run.
+
+        Reuses ``scripts/per_env_success_rate.py``'s helpers so the CLI tool
+        and the auto-invocation stay in lock-step. Failures are swallowed
+        (with a warning) — a print bug must never tank an otherwise good
+        eval run.
+        """
+        metrics_path = Path(eval_save_dir) / "eval_metrics.json"
+        if not metrics_path.exists():
+            return
+        try:
+            import sys as _sys
+            scripts_dir = str(Path(__file__).resolve().parent.parent / "scripts")
+            if scripts_dir not in _sys.path:
+                _sys.path.insert(0, scripts_dir)
+            from per_env_success_rate import summarize_run, print_run_table
+
+            print()
+            print_run_table(summarize_run(metrics_path))
+        except Exception as e:
+            print(f"warning: per-env success summary skipped: {e}")
+
     def _load_eval_language_embedding_bank(self, diffusion):
         if not getattr(diffusion.args, "use_language_conditioning", False):
             return None
@@ -2125,4 +2148,5 @@ class BaseManipulation:
         if adaptive_save_inference_data and adaptive_dump_state is not None:
             self._adaptive_finalize_inference_dump(eval_save_dir, adaptive_dump_state)
         self.video_recorder = None
+        self._print_per_env_success_summary(eval_save_dir)
         return
