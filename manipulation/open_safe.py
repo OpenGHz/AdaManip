@@ -12,8 +12,13 @@ import collections
 class OpenSafeManipulation(BaseManipulation) :
 
     # clock_wise=0 → chain 0 (拉门 — direct pull, no rotation needed)
-    # clock_wise=1 → chain 1 (顺时针旋转旋钮 -> 拉门)
-    # clock_wise=2 → chain 2 (逆时针旋转旋钮 -> 拉门)
+    # clock_wise=1 → chain (逆时针旋转旋钮 -> 拉门) — env's cw=1 means dof
+    #   rotates POSITIVE direction, which from the robot's viewpoint appears
+    #   counter-clockwise. (Env code comment at line 332 also labels this
+    #   "counter clock wise".) Door / window / lamp use the same orientation
+    #   convention; safe was previously inverted — this fix matches them.
+    # clock_wise=2 → chain (顺时针旋转旋钮 -> 拉门) — env's cw=2 means dof
+    #   rotates NEGATIVE direction (visually clockwise from the robot).
     _CHAIN_DIRECT: List[str] = ["拉门"]
     _CHAIN_CW: List[str] = ["顺时针旋转旋钮", "拉门"]
     _CHAIN_CCW: List[str] = ["逆时针旋转旋钮", "拉门"]
@@ -63,9 +68,11 @@ class OpenSafeManipulation(BaseManipulation) :
         if cw_int == 0:
             return list(self._CHAIN_DIRECT)
         if cw_int == 1:
-            return list(self._CHAIN_CW)
-        if cw_int == 2:
+            # env cw=1: dof rotates positive → visually counter-clockwise.
             return list(self._CHAIN_CCW)
+        if cw_int == 2:
+            # env cw=2: dof rotates negative → visually clockwise.
+            return list(self._CHAIN_CW)
         return None
 
     def per_env_extra_log_fields(
@@ -106,9 +113,9 @@ class OpenSafeManipulation(BaseManipulation) :
             elif op == "拉门":
                 statuses.append(False)
             elif op == "顺时针旋转旋钮":
-                statuses.append(cw == 1)
-            elif op == "逆时针旋转旋钮":
                 statuses.append(cw == 2)
+            elif op == "逆时针旋转旋钮":
+                statuses.append(cw == 1)
             else:
                 statuses.append(False)
         return attempt, statuses
@@ -293,7 +300,7 @@ class OpenSafeManipulation(BaseManipulation) :
             if policy == "succ":
                 if self.env.clock_wise[0]: # locked
                     cw_root = int(self.env.clock_wise[0].item())
-                    rotate_op = "顺时针旋转旋钮" if cw_root == 1 else "逆时针旋转旋钮"
+                    rotate_op = "逆时针旋转旋钮" if cw_root == 1 else "顺时针旋转旋钮"
                     # All approach / grasp / rotate-knob frames belong to the
                     # rotate-knob stage (step_index 0).
                     self.set_current_step(0, rotate_op)
@@ -512,7 +519,7 @@ class OpenSafeManipulation(BaseManipulation) :
                         # Locked → rotate-knob (per-env cw-correct so all
                         # envs unlock regardless of cw=1 vs cw=2 split from
                         # init_obj_dof_state) → re-grasp handle → pull.
-                        rotate_op = "顺时针旋转旋钮" if cw_root == 1 else "逆时针旋转旋钮"
+                        rotate_op = "逆时针旋转旋钮" if cw_root == 1 else "顺时针旋转旋钮"
                         self.set_current_step(1, rotate_op)
                         self.env.gripper = torch.zeros((self.env.num_envs,1), device=self.env.device)
                         for i in range(2):
@@ -590,13 +597,17 @@ class OpenSafeManipulation(BaseManipulation) :
                     # decision applies to every env. When chosen matches →
                     # attempt_chain = [chosen, 拉门]; otherwise →
                     # [chosen, other, 拉门].
+                    # Visual mapping (matches door/window/lamp convention):
+                    #   visual 顺时针 (CW) ↔ +Z hand rotation (s_rot_quat) ↔ env cw_root=2.
+                    #   visual 逆时针 (CCW) ↔ -Z hand rotation (rot_quat) ↔ env cw_root=1.
+                    # ``initial_choice`` value "cw"/"ccw" now matches the visual direction.
                     chosen_op = "顺时针旋转旋钮" if initial_choice == "cw" else "逆时针旋转旋钮"
                     other_op = "逆时针旋转旋钮" if initial_choice == "cw" else "顺时针旋转旋钮"
-                    chosen_quat = rot_quat if initial_choice == "cw" else s_rot_quat
-                    other_quat = s_rot_quat if initial_choice == "cw" else rot_quat
+                    chosen_quat = s_rot_quat if initial_choice == "cw" else rot_quat
+                    other_quat = rot_quat if initial_choice == "cw" else s_rot_quat
                     chosen_matches = (
-                        (initial_choice == "cw" and cw_root == 1)
-                        or (initial_choice == "ccw" and cw_root == 2)
+                        (initial_choice == "cw" and cw_root == 2)
+                        or (initial_choice == "ccw" and cw_root == 1)
                     )
 
                     self.set_current_step(0, chosen_op)
