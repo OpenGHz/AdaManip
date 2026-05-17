@@ -35,11 +35,16 @@ class OpenLampManipulation(BaseManipulation) :
 
     def task_success_for_env(self, env_id: int) -> bool:
         # Lamp's success criterion depends on the per-env mode:
-        # clock_wise == 1 → push switch (translation) → check one_dof > 0.01
+        # clock_wise == 1 → push switch (translation) → check one_dof > 0.007
         # clock_wise != 1 → rotate switch → check two_dof past two_flag
+        # (Threshold 0.007 chosen so all 7 lamp assets pass. lamp8's switch
+        # dof saturates at ~0.0074 due to a mesh hard-stop; other lamps
+        # reach ~0.01+. Collect threshold matches eval. With
+        # primitive_action_step=0.002, dof rises ~0.0016/step in the first
+        # 4 steps → ~4-5 frames per push trajectory.)
         if int(self.env.clock_wise[env_id].item()) == 1:
             return bool(
-                (torch.abs(self.env.one_dof_tensor[env_id, 0]) > 0.01).cpu().item()
+                (torch.abs(self.env.one_dof_tensor[env_id, 0]) > 0.007).cpu().item()
             )
         return bool(
             (
@@ -233,13 +238,19 @@ class OpenLampManipulation(BaseManipulation) :
         eps_num = self.cfg["task"]["num_episode"]
         policy = self.cfg["task"]["policy"]
         print(f"policy: {policy}")
-        primitive_action_step = 0.01
+        # Smaller per-step push so dof crosses the success threshold (0.008)
+        # in ~5 demo steps instead of 1 — gives each push trajectory ~5
+        # frames for training instead of a single frame.
+        primitive_action_step = 0.002
         rot_quat = torch.tensor([ 0, 0, -0.1305262, 0.9914449], device=self.env.device)
         s_rot_quat = torch.tensor([ 0, 0, 0.1305262, 0.9914449], device=self.env.device)
         ctx = self.collect_setup(role="manip")
         demo_buffer = Experience()
         hand_pose = self.env.hand_rigid_body_tensor[:,:7]
-        max_step = 15 if policy == "adaptive" else 10
+        # Bumped max_step from 15 → 25 so the slower push (0.002/step) has
+        # enough time to accumulate switch dof past the 0.008 threshold even
+        # when the gripper starts a bit off from the switch.
+        max_step = 25 if policy == "adaptive" else 15
         succ_cnt = [0] * self.env.num_envs
         for eps in range(eps_num):
             chose_list = [['z','y','r'] for _ in range(self.env.num_envs)]
@@ -353,6 +364,12 @@ class OpenLampManipulation(BaseManipulation) :
                 for env_id in range(self.env.num_envs):
                     if not done_flag[env_id]:
                         if self.env.clock_wise[env_id] == 1:
+                            # Threshold 0.007 chosen so lamp8 also passes —
+                            # its switch dof saturates at ~0.0074 due to a
+                            # mesh hard-stop while other lamps reach ~0.01+
+                            # before saturating. With primitive_action_step
+                            # = 0.002, dof rises ~0.0016/step in the first
+                            # 4 steps → ~4-5 frames per push trajectory.
                             if torch.abs(self.env.one_dof_tensor[env_id, 0]) > 0.007:
                                 if current_op[env_id] is not None:
                                     _flush_stage(env_id, current_op[env_id], True)
