@@ -123,6 +123,24 @@ class AdaptiveLanguageAskerConfig:
         )
         self.trajectory_sample_points: int = int(raw.get("trajectory_sample_points", 0))
 
+        self.video_only: bool = bool(raw.get("video_only", False))
+        self.trajectory_only: bool = bool(raw.get("trajectory_only", False))
+        if self.video_only and self.trajectory_only:
+            raise ValueError(
+                "asker.video_only and asker.trajectory_only are mutually exclusive"
+            )
+        self.disable_additional_prompt: bool = bool(
+            raw.get("disable_additional_prompt", False)
+        )
+
+        self.openai_api_mode: str = _coerce_str(raw.get("openai_api_mode", ""))
+        self.openai_reasoning_effort: Optional[str] = (
+            _coerce_str(raw["openai_reasoning_effort"])
+            if raw.get("openai_reasoning_effort") is not None
+            else None
+        )
+        self.openai_user_agent: str = _coerce_str(raw.get("openai_user_agent", ""))
+
         self.recategorize_videos: bool = bool(raw.get("recategorize_videos", True))
         self.lock_on_env_success: bool = bool(raw.get("lock_on_env_success", False))
 
@@ -220,6 +238,12 @@ class AdaptiveLanguageAsker:
             gemini_image_thinking_budget=asker_cfg.gemini_image_thinking_budget,
             gemini_upload_poll_interval=asker_cfg.gemini_upload_poll_interval,
             gemini_upload_timeout=asker_cfg.gemini_upload_timeout,
+            video_only=asker_cfg.video_only,
+            trajectory_only=asker_cfg.trajectory_only,
+            disable_additional_prompt=asker_cfg.disable_additional_prompt,
+            openai_api_mode=asker_cfg.openai_api_mode,
+            openai_reasoning_effort=asker_cfg.openai_reasoning_effort,
+            openai_user_agent=asker_cfg.openai_user_agent,
         )
         if asker_cfg.is_ground_truth:
             self.video2prompt = Video2PromptGroundTruth(config)
@@ -230,7 +254,7 @@ class AdaptiveLanguageAsker:
         prior["expanded_minimal_chains"] = expanded_minimal_chains
         self.video2prompt.set_prior(prior)
 
-        if asker_cfg.trajectory_context:
+        if asker_cfg.trajectory_context and not asker_cfg.video_only:
             self.trajectory_builder = ActionTrajectoryContextBuilder(
                 data_dir=None,
                 max_rows=asker_cfg.trajectory_sample_points,
@@ -275,13 +299,16 @@ class AdaptiveLanguageAsker:
             return chain_id is not None, chain_id
 
         # LLM path
-        if video_path is None:
+        if not self.cfg.trajectory_only and video_path is None:
             logger.warning("AdaptiveLanguageAsker[llm]: env=%d missing video_path", env_id)
             return False, None
 
         try:
             video_input: Union[str, List[np.ndarray]]
-            if getattr(self.video2prompt.asker, "prefers_video_file", False):
+            if self.cfg.trajectory_only:
+                # trajectory_only path inside Video2Prompt ignores the video argument.
+                video_input = []
+            elif getattr(self.video2prompt.asker, "prefers_video_file", False):
                 video_input = str(video_path)
             else:
                 frames = self._video_to_frames(str(video_path))
