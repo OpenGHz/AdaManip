@@ -360,9 +360,18 @@ class OpenPressureCookerManipulation(BaseManipulation) :
                         and self._pc_intrinsic_n[env_id] is None
                     ):
                         self._pc_intrinsic_n[env_id] = int(self._pc_cum_rot[env_id])
-                # update done_flag
+                # update done_flag — but only when the env crossed the
+                # success threshold *during a lift step*, so the trajectory
+                # always ends with 向上提起把手 (matches task design: lift
+                # is the final action). Without this guard, one_go mode can
+                # mark success mid-rotation when the big rotation step
+                # incidentally drags the cap dof past 0.035, producing
+                # minimal_chain = ["旋转把手"] (no lift) — which violates
+                # the schema.
                 for env_id in range(self.env.num_envs):
                     if (torch.abs(self.env.one_dof_tensor[env_id, 0]) > 0.035).cpu().item() and not done_flag[env_id]:
+                        if current_op[env_id] != "向上提起把手":
+                            continue
                         _flush(env_id, success=True)
                         done_flag[env_id] = True
                         self._mark_env_video_done(env_id)

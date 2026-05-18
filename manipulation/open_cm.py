@@ -329,9 +329,13 @@ class OpenCoffeeMachineManipulation(BaseManipulation) :
                         and self._cm_intrinsic_n[env_id] is None
                     ):
                         self._cm_intrinsic_n[env_id] = int(self._cm_cum_rot[env_id])
-                # update done_flag
+                # update done_flag — only flip done when the success crossed
+                # during a pull step. Task design ends with 拉动手柄;
+                # without this guard one_go can mark success mid-rotation.
                 for env_id in range(self.env.num_envs):
                     if (torch.abs(self.env.one_dof_tensor[env_id, 0]) > 0.035).cpu().item() and not done_flag[env_id]:
+                        if current_op[env_id] != "拉动手柄":
+                            continue
                         _flush(env_id, success=True)
                         done_flag[env_id] = True
                         self._mark_env_video_done(env_id)

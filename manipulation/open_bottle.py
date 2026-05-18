@@ -401,9 +401,14 @@ class OpenBottleManipulation(BaseManipulation) :
                         and self._bottle_intrinsic_n[env_id] is None
                     ):
                         self._bottle_intrinsic_n[env_id] = int(self._bottle_cum_rot[env_id])
-                # update env end flag
+                # update env end flag — only flip done when the success
+                # crossed during a lift step. Task design ends with
+                # 向上提起瓶盖; without this guard one_go can mark success
+                # mid-rotation.
                 for env_id in range(self.env.num_envs):
                     if (torch.abs(self.env.one_dof_tensor[env_id, 0]) > 0.04).cpu().item() and not done_flag[env_id]:
+                        if current_op[env_id] != "向上提起瓶盖":
+                            continue
                         _flush(env_id, success=True)
                         done_flag[env_id] = True
                         self._mark_env_video_done(env_id)

@@ -416,10 +416,14 @@ class OpenPenManipulation(BaseManipulation) :
                         and self._pen_intrinsic_n[env_id] is None
                     ):
                         self._pen_intrinsic_n[env_id] = int(self._pen_cum_rot[env_id])
-                # update env end flag
+                # update env end flag — only flip done when the success
+                # crossed during a lift step. Task design ends with
+                # 向上提起笔盖; without this guard one_go can mark success
+                # mid-rotation.
                 for env_id in range(self.env.num_envs):
                     if (torch.abs(self.env.one_dof_tensor[env_id, 0]) > 0.04).cpu().item() and not done_flag[env_id]:
-                        # Final stage caused success — flush with status=True.
+                        if current_op[env_id] != "向上提起笔盖":
+                            continue
                         _flush(env_id, success=True)
                         done_flag[env_id] = True
                         self._mark_env_video_done(env_id)
