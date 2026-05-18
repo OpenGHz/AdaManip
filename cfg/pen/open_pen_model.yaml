@@ -1,5 +1,6 @@
 task:
   task_name: "open_pen"
+  one_go: True
   policy: "adaptive"
   num_episode: 20
   num_eval_episode: 10
@@ -9,10 +10,15 @@ task:
   save_inference_data: true
 
   adaptive_language:
-    enable: false
+    enable: true
     max_retry_rounds: 3
     asker:
-      platform: ground-truth        # ground-truth | codex-cli | claude-cli | gemini | foxcode | ""
+      # Validated on open_pen_one_go_manip_adaptive_10_eps20_clock0.5 (2026-05-18):
+      # K=3 train groups [0,1,2] chain.accuracy=94.4% / 100% / 90.5% (mean 95%)
+      # and held-out test groups [5,7] both = 100%. Mode: trajectory_only with
+      # disable_additional_prompt=true (no additional_prompt was tuned).
+      # See docs/pen_reproduction.md and outputs/video2prompt/pen_training_process.md.
+      platform: cch                 # ground-truth | codex-cli | claude-cli | gemini | foxcode | cch
       model: gpt-5.5
       mock: false
       prompt_style: structured
@@ -21,8 +27,12 @@ task:
       frame_stride: 1
       camera_id: 1
       trajectory_context: true
-      trajectory_representation: delta
+      trajectory_representation: full   # validated; "delta" was the legacy default but not used in the 2026-05-18 sweep
       trajectory_sample_points: 0
+      trajectory_only: true             # validated mode; pen's rotate-vs-lift signal lives in the trajectory yaw + z, video adds noise
+      video_only: false
+      disable_additional_prompt: true   # matches --no_additional_prompt used in the validation sweep; pen_one_go's additional_prompt is empty anyway
+      openai_reasoning_effort: xhigh
       recategorize_videos: true
       lock_on_env_success: false
       claude_cli_command: claude
@@ -42,8 +52,8 @@ task:
       gemini_upload_timeout: 600
 
 model:
-  policy_mode: diffusion
-  # policy_mode: flow_matching
+  # policy_mode: diffusion
+  policy_mode: flow_matching
   obs_horizon: 2
   action_horizon: 1
   pred_horizon: 4
@@ -60,8 +70,8 @@ model:
   Transformer: False
 
   grasp: True 
-  grasp_model_path: './ckpt/pen/pen_grasp.pth'
-  diffusion_model_path:  './ckpt/pen/pen_manip.pth'
+  grasp_model_path: logs/pen/grasp/May14/21-30-16/ema_nets.pth
+  diffusion_model_path: logs/pen/manip/May14/21-25-19/ema_nets.pth
   use_language_conditioning: True
   language_input_dim: 512
   language_proj_dim: 128
@@ -70,7 +80,7 @@ model:
 train:
   manip:
     dataset_path:
-      - ./demo_data/open_pen_manip_adaptive_10_eps20_clock0.5/demo_data.zip
+      - ./demo_data/open_pen_one_go_manip_adaptive_10_eps20_clock0.5/demo_data.zip
     batch_size: 64
     num_epochs: 800
   grasp:
