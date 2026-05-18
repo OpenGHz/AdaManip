@@ -12,7 +12,7 @@ env:
   numActions: 9
   envSpacing: 2.0
   horizon: 30
-  clockwise: 0.0
+  clockwise: 0.5
   actionSpeedScale: 20
   enableDebugVis: False
 

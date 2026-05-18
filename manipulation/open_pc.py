@@ -322,7 +322,18 @@ class OpenPressureCookerManipulation(BaseManipulation) :
                     if res == 'z':
                         pre_p[i, 2] += open_size
                     elif res == 'r':
-                        pre_p[i] += rotate_dir[i] * step_size
+                        # cw-aware rotation: +rotate_dir drives dof positive
+                        # (correct for cw=0 where upper>0, lower=0); for cw=1
+                        # (upper=0, lower<0) we need -rotate_dir so the dof
+                        # goes negative toward the free side. Originally pc
+                        # only supported cw=0 (cfg.clockwise=0.0); when we
+                        # raised it to 0.5 to expose lift-fail retry patterns,
+                        # cw=1 envs needed this sign flip — otherwise
+                        # rotation pushes against the upper=0 hard limit,
+                        # mechanism never unlocks, and the policy oscillates.
+                        cw_i = int(self.env.clock_wise[i].item())
+                        sign = 1 if cw_i == 0 else -1
+                        pre_p[i] += sign * rotate_dir[i] * step_size
                     else:
                         raise NotImplementedError
 
