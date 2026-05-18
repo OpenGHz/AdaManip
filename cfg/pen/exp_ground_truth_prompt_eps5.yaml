@@ -1,0 +1,196 @@
+task:
+  task_name: open_pen
+  one_go: true
+  policy: adaptive
+  num_episode: 5
+  num_eval_episode: 5
+  seed: 0
+  max_step: 25
+  save_inference_data: true
+  adaptive_language:
+    enable: true
+    max_retry_rounds: 3
+    asker:
+      platform: ground-truth
+      model: gpt-5.5
+      mock: false
+      prompt_style: structured
+      check_success: together
+      frame_max_count: 12
+      frame_stride: 1
+      camera_id: 1
+      trajectory_context: true
+      trajectory_representation: full
+      trajectory_sample_points: 0
+      recategorize_videos: true
+      lock_on_env_success: false
+      claude_cli_command: claude
+      claude_cli_skip_permissions: true
+      claude_cli_timeout: 900
+      codex_cli_command: codex
+      codex_cli_timeout: 900
+      codex_cli_sandbox: read-only
+      codex_cli_approval_policy: never
+      codex_cli_cd: ''
+      codex_cli_ephemeral: true
+      codex_cli_effort: xhigh
+      gemini_temperature: 1.0
+      gemini_thinking_budget: -1
+      gemini_image_thinking_budget: 0
+      gemini_upload_poll_interval: 1.0
+      gemini_upload_timeout: 600
+model:
+  policy_mode: flow_matching
+  obs_horizon: 2
+  action_horizon: 1
+  pred_horizon: 4
+  num_diffusion_iters: 100
+  flow_sampling_steps: 100
+  flow_beta_alpha: 1.5
+  flow_beta_beta: 1.0
+  flow_tau_cutoff: 0.999
+  discrete: false
+  input_feat: 3
+  feat_dim: 128
+  dof_dim: 0
+  action_dim: 9
+  Transformer: false
+  grasp: true
+  grasp_model_path: logs/pen/grasp/May14/21-30-16/ema_nets.pth
+  diffusion_model_path: logs/pen/manip/May14/21-25-19/ema_nets.pth
+  use_language_conditioning: true
+  language_input_dim: 512
+  language_proj_dim: 128
+train:
+  manip:
+    dataset_path:
+    - ./demo_data/open_pen_one_go_manip_adaptive_10_eps20_clock0.5/demo_data.zip
+    batch_size: 64
+    num_epochs: 800
+  grasp:
+    dataset_path:
+    - ./demo_data/open_pen_grasp_adaptive_10_eps20_clock0.5/demo_data.zip
+    batch_size: 64
+    num_epochs: 800
+  collectData: false
+env:
+  env_name: open pen
+  numEnvs: 10
+  numObservations: 26
+  numActions: 9
+  envSpacing: 2.0
+  horizon: 35
+  clockwise: 0.5
+  actionSpeedScale: 20
+  enableDebugVis: false
+  enableCameraSensors: true
+  enableForceSensors: false
+  collectData: true
+  collectPC: false
+  collectForce: true
+  # collectRGBVideo: <unset> — relies on the new inference default (True);
+  # see manipulation/base_manipulation.py:_init_video_recorder and
+  # docs/inference.md §5.
+  visualizePointcloud: false
+  PointDownSampleNum: 4096
+  reset:
+    bottle:
+      resetPositionNoise: 0.0
+      resetRotationNoise: 0.0
+      resetDofPosRandomInterval: 0.0
+      resetDofVelRandomInterval: 0.0
+    franka:
+      resetPositionNoise: 0.0
+      resetRotationNoise: 0.0
+      resetDofPosRandomInterval: 0.0
+      resetDofVelRandomInterval: 0.0
+  driveMode: osc
+  clipObservations: 5.0
+  clipActions: 1.0
+  cam:
+    width: 512
+    height: 512
+    cam_far_plane: 100
+    cam_near_plane: 0.01
+    cam_horizontal_fov: 85
+    cam_start:
+    - - 0
+      - -0.3
+      - 0.55
+    - - 0
+      - 0.3
+      - 0.55
+    cam_target:
+    - - 0
+      - 0
+      - 0.2
+    - - 0
+      - 0
+      - 0.2
+  asset:
+    assetRoot: ./assets
+    datasetPath: pen
+    AssetNum: 10
+    randomAsset: false
+    load_block: test
+    limit_random: 0.5
+    Assets:
+      test:
+        pen_1:
+          bounding_box: pen_1/bounding_box.json
+          name: pen_1
+          path: pen_1/mobility.urdf
+        pen_2:
+          bounding_box: pen_2/bounding_box.json
+          name: pen_2
+          path: pen_2/mobility.urdf
+        pen_4:
+          bounding_box: pen_4/bounding_box.json
+          name: pen_4
+          path: pen_4/mobility.urdf
+        pen_5:
+          bounding_box: pen_5/bounding_box.json
+          name: pen_5
+          path: pen_5/mobility.urdf
+        pen_6:
+          bounding_box: pen_6/bounding_box.json
+          name: pen_6
+          path: pen_6/mobility.urdf
+        pen_7:
+          bounding_box: pen_7/bounding_box.json
+          name: pen_7
+          path: pen_7/mobility.urdf
+        pen_10:
+          bounding_box: pen_10/bounding_box.json
+          name: pen_10
+          path: pen_10/mobility.urdf
+        pen_13:
+          bounding_box: pen_13/bounding_box.json
+          name: pen_13
+          path: pen_13/mobility.urdf
+        pen_17:
+          bounding_box: pen_17/bounding_box.json
+          name: pen_17
+          path: pen_17/mobility.urdf
+        pen_18:
+          bounding_box: pen_18/bounding_box.json
+          name: pen_18
+          path: pen_18/mobility.urdf
+    StartID: 0
+sim:
+  substeps: 2
+  physx:
+    num_threads: 4
+    solver_type: 1
+    num_position_iterations: 8
+    num_velocity_iterations: 0
+    contact_offset: 0.002
+    rest_offset: 0.0
+    bounce_threshold_velocity: 0.2
+    max_depenetration_velocity: 1000.0
+    default_buffer_size_multiplier: 5.0
+  flex:
+    num_outer_iterations: 5
+    num_inner_iterations: 20
+    warm_start: 0.8
+    relaxation: 0.75

@@ -751,7 +751,12 @@ class BaseManipulation:
     # =====================================================================
 
     def _init_video_recorder(self, save_dir):
-        if not self.cfg["env"].get("collectRGBVideo", False):
+        # Default to True so inference runs save RGB videos for downstream
+        # inspection (verifying that the policy actually executes the chain
+        # the asker committed to). Data-collection configs already set this
+        # explicitly to True; users who want to opt out at inference time
+        # must set env.collectRGBVideo: false in their cfg.
+        if not self.cfg["env"].get("collectRGBVideo", True):
             self.video_recorder = None
             return
         video_cam_cfg = self.cfg["env"].get("videoCam")
@@ -1761,7 +1766,9 @@ class BaseManipulation:
                 "[adaptive] chain inference priority: " + ", ".join(priority_parts)
             )
         if adaptive_save_inference_data:
-            if not self.cfg.get("env", {}).get("collectRGBVideo", False):
+            # Match the new default in _init_video_recorder: only warn when
+            # the user has explicitly opted out of video recording.
+            if not self.cfg.get("env", {}).get("collectRGBVideo", True):
                 print(
                     "[dump] save_inference_data=true requires env.collectRGBVideo=true; "
                     "videos will be missing from the dump."

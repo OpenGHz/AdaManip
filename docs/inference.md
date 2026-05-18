@@ -282,7 +282,9 @@ env:
 
 因此默认会评估 1 轮、每轮 10 个并行环境。
 
-如果 `env.collectRGBVideo=True`，视频会写到：
+推理路径下 `env.collectRGBVideo` 的**默认值为 `True`**（数据采集路径下各 `collect_*.yaml`
+已经显式设为 `True`，不受影响）。所以除非在 cfg 中显式写 `env.collectRGBVideo: false`，
+否则评估时都会写出视频到：
 
 ```text
 eval_data/eval_open_microwave_<policy>_<AssetNum>_eps<num_episode>_clock<clockwise>_<timestamp>/rgb_videos/
@@ -292,9 +294,9 @@ eval_data/eval_open_microwave_<policy>_<AssetNum>_eps<num_episode>_clock<clockwi
 
 ### 5.1 推理输出文件与日志
 
-当前 `diffusion_evaluate()` 不会写出 zarr 或 checkpoint；评估指标会保存为 JSON，推理配置会单独保存为 YAML，视频文件取决于 `env.collectRGBVideo`。
+当前 `diffusion_evaluate()` 不会写出 zarr 或 checkpoint；评估指标会保存为 JSON，推理配置会单独保存为 YAML，视频文件取决于 `env.collectRGBVideo`（推理默认 `True`，详见 §5）。
 
-默认配置中：
+如果想在推理时显式跳过录制视频，可以在 cfg 中加上：
 
 ```yaml
 env:
