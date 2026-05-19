@@ -11,7 +11,14 @@ task:
     enable: false
     max_retry_rounds: 3
     asker:
-      platform: ground-truth        # ground-truth | codex-cli | claude-cli | gemini | foxcode | ""
+      # Validated on open_door_one_go_manip_adaptive_8_eps20_clock0.5 (2026-05-18):
+      # K=3 train groups [0,1,3] chain.accuracy=100% / 90.5% / 95.2% (mean 95.2%)
+      # and held-out test groups [2,4] = 95.2% / 90.5%. Mode: trajectory (video +
+      # trajectory) with additional_prompt enabled. The validated additional_prompt
+      # lives at third_party/ada_manip/cfg/language_template.json:tasks.door_one_go.
+      # See docs/door_one_go_reproduction.md and
+      # outputs/video2prompt/door_training_process.md.
+      platform: cch                 # ground-truth | codex-cli | claude-cli | gemini | foxcode | cch
       model: gpt-5.5
       mock: false
       prompt_style: structured
@@ -20,10 +27,11 @@ task:
       frame_stride: 1
       camera_id: 1
       trajectory_context: true
-      trajectory_representation: delta
+      trajectory_representation: full   # validated; "delta" was the legacy default but not used in the 2026-05-18 sweep
       trajectory_sample_points: 0
       recategorize_videos: true
       lock_on_env_success: false
+      openai_reasoning_effort: xhigh
       claude_cli_command: claude
       claude_cli_skip_permissions: true
       claude_cli_timeout: 900
