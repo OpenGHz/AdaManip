@@ -76,7 +76,12 @@
 2. 临时把 stages 展开到原子层（用 `expand_chain_to_atomic`）。
 3. 用 `is_subsequence` 检查 `ground_truth_chain` 的原子序列是不是 `language_chain` 的有序子序列。这里用子序列（不是前缀）：更长的语言条件可能涵盖真实最小链所有动作；同时区分 `顺时针旋转` 与 `逆时针旋转` 等异向操作。
 4. 子序列检查通过 → policy 已覆盖真实需求 → `attempt_chain = language_chain`。
-5. 子序列检查不通过 → 第一次按 `language_chain` 执行不足以完成任务 → 诊断模型假设之后追加真实最小恢复链 → `attempt_chain = language_chain + ground_truth_chain`。
+5. 子序列检查不通过 → 第一次按 `language_chain` 执行不足 → 追加真实最小恢复链。但**与 ground truth 共享的尾部动作**（如 `拉门` / `向上提起`）受前序步骤是否成功的**门控**：
+   - 若 `language_chain` 的前缀里有个**与 ground truth 冲突的操作**（原子层面：该操作在 `ground_truth_chain` 中根本不存在，典型是转错方向），该操作会失败、共享尾部动作永远到不了，不能重复计——此时先丢掉 `language_chain` 与 gt 的**最长公共后缀**再拼接：`[顺,拉]` vs gt `[逆,拉]` → `[顺,逆,拉]`（3 步），**不是** `[顺,拉,逆,拉]`（4 步）。
+   - 若前缀里没有冲突操作（`language_chain` 只是一次"过早的终止动作"，如 `[拉门]` / `[向上提起]`，它会真实执行并失败再恢复）→ 保持整条 `language_chain`：`[拉门]+[按按钮,拉门]`。
+   - 即 `attempt_chain = lead + ground_truth_chain`（lead 为冲突时去掉公共后缀的前缀），冲突不成立时退化为 `language_chain + ground_truth_chain`。
+
+   **说明**：此门控是 2026-06 修复——旧版无条件 `language_chain + ground_truth_chain` 会对"方向二选一且共享末端动作"的任务（door / window / safe）把共享末端（拉门）算两遍、高估 1 步。采集数据验证：这些任务的 retry attempt_chain 均为 3 步（`[顺,逆,拉]`），无 4 步链。修复不改变 `build_attempt_partitions` 的划分结构（已对全部任务核验），故 asker 诊断排序、`infer_reasonable_prediction_chains` 打分不受影响，仅 attempt 长度与 `score_*` 的 `mean_attempt_atomic_length` 这一低优先级 tiebreaker 变化。
 
 只做抽象 chain 推理，不读 `clock_wise` / 几何 / 视频；它表达的是"在某个语言条件下（假设被严格遵循、无失误），若真实状态属于某条最小链，理论上会观察到什么"。如果 rollout 实际有夹爪松开 / 门回关 / 二次尝试等物理细节，实测 attempt 可能比抽象结果更长——本函数无法自动覆盖那些情况。
 

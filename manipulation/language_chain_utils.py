@@ -175,13 +175,42 @@ def infer_attempt_chain(language_chain: Iterable[str], ground_truth_chain: Itera
     First the policy executes ``language_chain``. If that chain already contains
     the ground-truth requirement, the observed attempt is just ``language_chain``.
     Otherwise the first attempt is insufficient, so the diagnostic abstraction
-    appends the ground-truth recovery chain.
+    appends the ground-truth recovery chain — except a trailing action shared
+    with the ground truth (e.g. the final 拉门) that is gated behind a *conflicting*
+    leading op (e.g. a wrong rotation direction) is not double-counted; see the
+    inline comment for the exact rule.
     """
 
     language_chain = normalize_chain(language_chain)
     ground_truth_chain = normalize_chain(ground_truth_chain)
     if chain_satisfies_ground_truth(language_chain, ground_truth_chain):
         return language_chain
+    # First attempt insufficient -> append the ground-truth recovery chain.
+    #
+    # But a trailing action that ``language_chain`` shares with
+    # ``ground_truth_chain`` (e.g. the final 拉门 / 向上提起) is *gated* on the
+    # preceding operations succeeding. When language_chain's leading ops conflict
+    # with the ground truth (a wrong rotation direction: an op that does not
+    # appear in ground_truth_chain at all), that op fails, the shared trailing
+    # action is never reached, and must not be counted twice. In that case drop
+    # the shared suffix from the language part before appending the recovery, so
+    # e.g. [顺,拉] vs gt [逆,拉] -> [顺,逆,拉] (3 steps), not [顺,拉,逆,拉] (4).
+    #
+    # If the leading remainder is empty (language_chain is just a premature
+    # terminal action such as [拉门] / [向上提起], which genuinely executes and
+    # fails before recovery), keep language_chain whole: [拉门]+[按按钮,拉门].
+    k = 0
+    while (
+        k < len(language_chain)
+        and k < len(ground_truth_chain)
+        and language_chain[-1 - k] == ground_truth_chain[-1 - k]
+    ):
+        k += 1
+    lead = language_chain[: len(language_chain) - k]
+    ground_truth_atomic = set(expand_chain_to_atomic(ground_truth_chain))
+    lead_atomic = expand_chain_to_atomic(lead)
+    if k > 0 and lead_atomic and any(op not in ground_truth_atomic for op in lead_atomic):
+        return lead + ground_truth_chain
     return language_chain + ground_truth_chain
 
 
