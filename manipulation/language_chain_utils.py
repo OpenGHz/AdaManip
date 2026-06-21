@@ -8,7 +8,8 @@ microwave-specific mechanism such as clock_wise.
 from __future__ import annotations
 
 import re
-from typing import Dict, Iterable, List, Sequence, Tuple
+from itertools import combinations
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 
 _REPEAT_STAGE_RE = re.compile(r"^\s*(\d+)x(.+?)\s*$")
@@ -169,49 +170,63 @@ def chain_satisfies_ground_truth(language_chain: Iterable[str], ground_truth_cha
     return is_subsequence(ground_truth_atomic, language_atomic)
 
 
-def infer_attempt_chain(language_chain: Iterable[str], ground_truth_chain: Iterable[str]) -> List[str]:
-    """Infer the abstract attempt chain under the two-phase diagnostic model.
+def infer_attempt_chain(
+    language_chain: Iterable[str],
+    ground_truth_chain: Iterable[str],
+    observed_attempt_chains: Optional[Iterable[Iterable[str]]] = None,
+) -> List[str]:
+    """Infer the attempt chain under the two-phase diagnostic model.
 
     First the policy executes ``language_chain``. If that chain already contains
-    the ground-truth requirement, the observed attempt is just ``language_chain``.
-    Otherwise the first attempt is insufficient, so the diagnostic abstraction
-    appends the ground-truth recovery chain — except a trailing action shared
-    with the ground truth (e.g. the final 拉门) that is gated behind a *conflicting*
-    leading op (e.g. a wrong rotation direction) is not double-counted; see the
-    inline comment for the exact rule.
+    the ground-truth requirement (atomic subsequence), the observed attempt is just
+    ``language_chain``. Otherwise the first attempt is insufficient, so the
+    diagnostic abstraction appends the ground-truth recovery chain:
+    ``candidate = language_chain + ground_truth_chain``.
+
+    That bare concatenation is *physics-blind*: from abstract tokens alone it cannot
+    know whether a wrong leading action (e.g. a wrong rotation direction) is
+    mechanically blocked before a trailing action shared with the ground truth (so
+    the shared 拉门 / 提起 never executes -> real attempt is shorter, e.g. door
+    ``[顺,逆,拉]``), or whether that trailing action must be performed to even detect
+    failure (so it executes -> real attempt equals the concat, e.g. microwave
+    ``[拉门,按按钮,拉门]``, or a "must pull to detect" door variant ``[顺,拉,逆,拉]``).
+
+    ``observed_attempt_chains`` (optional) lets the caller pass the recorded real
+    attempts (collection ``attempt_chain_counts``) so the abstract result is snapped
+    onto data — the only source that encodes the task physics:
+
+    1. If ``candidate`` is itself a recorded attempt -> return it.
+    2. Else keep the **first** language step and the **trailing** ground-truth steps
+       fixed and drop a subset of the middle steps (preferring to remove as few as
+       possible) until the result equals a recorded attempt.
+    3. If nothing matches (or no observed attempts given) -> return ``candidate``.
+
+    With no ``observed_attempt_chains`` the behaviour is the original abstract
+    concat, which is all the diagnostic partitioning in §1.8 needs (it only cares
+    which ground truths yield the *same* attempt, not the step count).
     """
 
     language_chain = normalize_chain(language_chain)
     ground_truth_chain = normalize_chain(ground_truth_chain)
     if chain_satisfies_ground_truth(language_chain, ground_truth_chain):
         return language_chain
-    # First attempt insufficient -> append the ground-truth recovery chain.
-    #
-    # But a trailing action that ``language_chain`` shares with
-    # ``ground_truth_chain`` (e.g. the final 拉门 / 向上提起) is *gated* on the
-    # preceding operations succeeding. When language_chain's leading ops conflict
-    # with the ground truth (a wrong rotation direction: an op that does not
-    # appear in ground_truth_chain at all), that op fails, the shared trailing
-    # action is never reached, and must not be counted twice. In that case drop
-    # the shared suffix from the language part before appending the recovery, so
-    # e.g. [顺,拉] vs gt [逆,拉] -> [顺,逆,拉] (3 steps), not [顺,拉,逆,拉] (4).
-    #
-    # If the leading remainder is empty (language_chain is just a premature
-    # terminal action such as [拉门] / [向上提起], which genuinely executes and
-    # fails before recovery), keep language_chain whole: [拉门]+[按按钮,拉门].
-    k = 0
-    while (
-        k < len(language_chain)
-        and k < len(ground_truth_chain)
-        and language_chain[-1 - k] == ground_truth_chain[-1 - k]
-    ):
-        k += 1
-    lead = language_chain[: len(language_chain) - k]
-    ground_truth_atomic = set(expand_chain_to_atomic(ground_truth_chain))
-    lead_atomic = expand_chain_to_atomic(lead)
-    if k > 0 and lead_atomic and any(op not in ground_truth_atomic for op in lead_atomic):
-        return lead + ground_truth_chain
-    return language_chain + ground_truth_chain
+    candidate = language_chain + ground_truth_chain
+    if not observed_attempt_chains:
+        return candidate
+    observed = {tuple(normalize_chain(a)) for a in observed_attempt_chains}
+    if tuple(candidate) in observed:
+        return candidate
+    # Snap onto recorded data: keep first language step + ground-truth tail fixed,
+    # drop a subset of the middle steps (remove as few as possible) to match a
+    # recorded attempt; covers the "wrong rotation blocked" physics.
+    if language_chain:
+        first, middle = language_chain[:1], language_chain[1:]
+        for keep in range(len(middle), -1, -1):
+            for idx in combinations(range(len(middle)), keep):
+                cand = first + [middle[i] for i in idx] + ground_truth_chain
+                if tuple(cand) in observed:
+                    return cand
+    return candidate
 
 
 def build_attempt_partitions(

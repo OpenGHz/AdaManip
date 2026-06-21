@@ -68,22 +68,24 @@
 
 完整示例脚本：[`tests/show_language_chain_reasoning_examples.py`](../../tests/show_language_chain_reasoning_examples.py)。
 
-### 1.7 `infer_attempt_chain(language_chain, ground_truth_chain) -> List[str]`
+### 1.7 `infer_attempt_chain(language_chain, ground_truth_chain, observed_attempt_chains=None) -> List[str]`
 
-抽象推理"如果 policy 严格按 `language_chain` 执行、且 ground truth 是 `ground_truth_chain`，会观察到什么完整 attempt"：
+抽象推理"按 `language_chain` 执行、ground truth 是 `ground_truth_chain` 时观察到的完整 attempt"：
 
-1. 先 `normalize_chain` 两个入参。
-2. 临时把 stages 展开到原子层（用 `expand_chain_to_atomic`）。
-3. 用 `is_subsequence` 检查 `ground_truth_chain` 的原子序列是不是 `language_chain` 的有序子序列。这里用子序列（不是前缀）：更长的语言条件可能涵盖真实最小链所有动作；同时区分 `顺时针旋转` 与 `逆时针旋转` 等异向操作。
-4. 子序列检查通过 → policy 已覆盖真实需求 → `attempt_chain = language_chain`。
-5. 子序列检查不通过 → 第一次按 `language_chain` 执行不足 → 追加真实最小恢复链。但**与 ground truth 共享的尾部动作**（如 `拉门` / `向上提起`）受前序步骤是否成功的**门控**：
-   - 若 `language_chain` 的前缀里有个**与 ground truth 冲突的操作**（原子层面：该操作在 `ground_truth_chain` 中根本不存在，典型是转错方向），该操作会失败、共享尾部动作永远到不了，不能重复计——此时先丢掉 `language_chain` 与 gt 的**最长公共后缀**再拼接：`[顺,拉]` vs gt `[逆,拉]` → `[顺,逆,拉]`（3 步），**不是** `[顺,拉,逆,拉]`（4 步）。
-   - 若前缀里没有冲突操作（`language_chain` 只是一次"过早的终止动作"，如 `[拉门]` / `[向上提起]`，它会真实执行并失败再恢复）→ 保持整条 `language_chain`：`[拉门]+[按按钮,拉门]`。
-   - 即 `attempt_chain = lead + ground_truth_chain`（lead 为冲突时去掉公共后缀的前缀），冲突不成立时退化为 `language_chain + ground_truth_chain`。
+1. `normalize_chain` 两个入参。
+2. 原子层 `is_subsequence` 检查 `ground_truth_chain` 是否为 `language_chain` 的有序子序列（子序列而非前缀：更长的语言条件可涵盖真实最小链；同时区分 `顺时针`/`逆时针` 异向）。
+3. 通过 → policy 已覆盖真实需求 → `attempt_chain = language_chain`。
+4. 不通过 → 第一次执行不足 → `candidate = language_chain + ground_truth_chain`（追加恢复链）。
 
-   **说明**：此门控是 2026-06 修复——旧版无条件 `language_chain + ground_truth_chain` 会对"方向二选一且共享末端动作"的任务（door / window / safe）把共享末端（拉门）算两遍、高估 1 步。采集数据验证：这些任务的 retry attempt_chain 均为 3 步（`[顺,逆,拉]`），无 4 步链。修复不改变 `build_attempt_partitions` 的划分结构（已对全部任务核验），故 asker 诊断排序、`infer_reasonable_prediction_chains` 打分不受影响，仅 attempt 长度与 `score_*` 的 `mean_attempt_atomic_length` 这一低优先级 tiebreaker 变化。
+第 4 步的拼接是 **physics-blind**：从抽象 token 分不清"转错方向被机械阻挡、共享末端动作（拉门/提起）不执行"（实测更短，door `[顺,逆,拉]`=3）与"必须做末端动作才能判失败、末端真执行"（实测=拼接，microwave `[拉门,按按钮,拉门]`，或'必须拉才判失败'的 door 变体 `[顺,拉,逆,拉]`）。同样 token 真实是 3 步还是 4 步，**完全由任务物理决定，不在 token 里**。
 
-只做抽象 chain 推理，不读 `clock_wise` / 几何 / 视频；它表达的是"在某个语言条件下（假设被严格遵循、无失误），若真实状态属于某条最小链，理论上会观察到什么"。如果 rollout 实际有夹爪松开 / 门回关 / 二次尝试等物理细节，实测 attempt 可能比抽象结果更长——本函数无法自动覆盖那些情况。
+**可选 `observed_attempt_chains`**：传入采集记录的真实 attempt（`attempt_chain_counts`，它编码了该任务物理）时，把抽象 `candidate` 对齐到真值——
+
+- 若 `candidate` 本身就是一条采集 attempt → 直接返回（覆盖 microwave 及"必须拉"的 door B 变体 `[顺,拉,逆,拉]`）。
+- 否则**保留首个步骤 + 尾部 ground-truth 步骤不动**，删中间多余步骤（优先少删），使结果落在采集集合（覆盖 door `[顺,逆,拉]`，删掉中间多余那次拉）。
+- 都匹配不上（或没传）→ 退回 `candidate`（即原抽象行为）。
+
+不传 `observed_attempt_chains` 时即原始抽象拼接——§1.8 `build_attempt_partitions` 的诊断划分只看"哪些 gt 产生相同 attempt"、不看步数，所以无需也不受影响；**效率统计的步数应传采集数据走 resolve**。全任务核验：resolve 出的 retry 均落在各自采集集合；door 当前数据→3 步，若将来数据变 4 步→自动给 4 步（physics 从数据读，不臆测）。
 
 ### 1.8 `build_attempt_partitions(language_chain, expanded_minimal_chains) -> Dict[Tuple[str, ...], List[int]]`
 
