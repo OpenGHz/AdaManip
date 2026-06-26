@@ -178,6 +178,8 @@ for env_id in range(num_envs):
 
 ## 4. `command_chains` —— 训练时按这个采样语言条件
 
+> 端到端推导链路（prefix 规则 + bank 展开 + 两次计算的时机 + 下游消费）见 [`command_chains_derivation.md`](command_chains_derivation.md)；本节是概览。
+
 `command_chains` 是 dataloader 在 batch 时为每条 trajectory 选语言 embedding 时的**候选集**——dataloader 从 `command_chains` 中随机挑一条，用其 chain id 取 `language_embedding_dict.json` 的对应 embedding 作为 condition。
 
 ### 4.1 计算规则
@@ -319,6 +321,7 @@ bank 在 episode 开始前就用 `cfg/language_template.json` 的 `minimal_chain
 ## 9. 参考代码位置
 
 - chain 计算与 sidecar 写入：`manipulation/base_manipulation.py::collect_episode_end` / `collect_finalize` / `save_language_sidecars`
+- `command_chains` 端到端推导（prefix 规则 + bank 展开 + 两次计算时机 + 下游消费）：[`command_chains_derivation.md`](command_chains_derivation.md)
 - 任务级钩子（详细签名 + 行为见 [`chain_utils_reference.md`](chain_utils_reference.md) §2）：
   - `canonical_minimal_chain_for_state(state)`：所有任务都 override，返回该 cw 状态下任务模板的"标准答案"链。
   - `concrete_attempt_chain_for_collect(env_id, state)`：返回 `(attempt_chain, stage_status)`。pen / bottle / pc / cm / microwave 各自 override；其他任务用 base 默认。
